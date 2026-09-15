@@ -49,6 +49,38 @@ tests = \
   riscv-lw.vmh \
   riscv-ori.vmh \
   riscv-sw.vmh \
+  riscv-sub.vmh \
+  riscv-and.vmh \
+  riscv-or.vmh \
+  riscv-xor.vmh \
+  riscv-slt.vmh \
+  riscv-sltu.vmh \
+  riscv-sra.vmh \
+  riscv-srl.vmh \
+  riscv-sll.vmh \
+  riscv-mul.vmh \
+  riscv-div.vmh \
+  riscv-divu.vmh \
+  riscv-rem.vmh \
+  riscv-remu.vmh \
+  riscv-andi.vmh \
+  riscv-xori.vmh \
+  riscv-slti.vmh \
+  riscv-sltiu.vmh \
+  riscv-srai.vmh \
+  riscv-srli.vmh \
+  riscv-slli.vmh \
+  riscv-lh.vmh \
+  riscv-lhu.vmh \
+  riscv-lb.vmh \
+  riscv-lbu.vmh \
+  riscv-sh.vmh \
+  riscv-sb.vmh \
+  riscv-jalr.vmh \
+  riscv-beq.vmh \
+  riscv-bltu.vmh \
+  riscv-bge.vmh \
+  riscv-bgeu.vmh \
 
 
 
