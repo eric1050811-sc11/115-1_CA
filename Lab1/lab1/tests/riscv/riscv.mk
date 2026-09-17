@@ -12,7 +12,6 @@ riscv_srcs += \
   riscv-lw.S \
   riscv-ori.S \
   riscv-sw.S \
-  
   riscv-jr.S \
   riscv-and.S \
   riscv-andi.S \
@@ -46,7 +45,7 @@ riscv_srcs += \
   riscv-srli.S \
   riscv-sub.S \
   riscv-xor.S \
-  riscv-xori.S
-  # TODO: riscv-mulh.S \
-  # TODO: riscv-mulhu.S \
-  # TODO: riscv-mulhsu.S \
+  riscv-xori.S \
+  riscv-mulh.S \
+  riscv-mulhu.S \
+  riscv-mulhsu.S \

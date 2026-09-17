@@ -81,6 +81,9 @@ tests = \
   riscv-bltu.vmh \
   riscv-bge.vmh \
   riscv-bgeu.vmh \
+  riscv-mulh.vmh \
+  riscv-mulhu.vmh \
+  riscv-mulhsu.vmh
 
 
 

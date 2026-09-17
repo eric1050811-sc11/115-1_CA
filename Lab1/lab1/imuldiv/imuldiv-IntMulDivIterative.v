@@ -29,7 +29,9 @@ module imuldiv_IntMulDivIterative
   // Input Select
   //----------------------------------------------------------------------
 
-  wire mulreq_val    = ( muldivreq_msg_fn == `IMULDIV_MULDIVREQ_MSG_FUNC_MUL )
+  wire mulreq_val    = ( muldivreq_msg_fn == `IMULDIV_MULDIVREQ_MSG_FUNC_MUL
+                     ||  muldivreq_msg_fn == `IMULDIV_MULDIVREQ_MSG_FUNC_MULHU
+                     ||  muldivreq_msg_fn == `IMULDIV_MULDIVREQ_MSG_FUNC_MULHSU )
                      &&  muldivreq_val && divreq_rdy;
 
   wire divreq_val    = ( muldivreq_msg_fn != `IMULDIV_MULDIVREQ_MSG_FUNC_MUL )
@@ -37,6 +39,10 @@ module imuldiv_IntMulDivIterative
 
   wire divreq_msg_fn = ( muldivreq_msg_fn == `IMULDIV_MULDIVREQ_MSG_FUNC_DIV
                      ||  muldivreq_msg_fn == `IMULDIV_MULDIVREQ_MSG_FUNC_REM );
+
+  wire [1:0] mulreq_mode = (muldivreq_msg_fn == `IMULDIV_MULDIVREQ_MSG_FUNC_MUL)    ? 2'd0 :
+                           (muldivreq_msg_fn == `IMULDIV_MULDIVREQ_MSG_FUNC_MULHU)  ? 2'd1 :
+                           (muldivreq_msg_fn == `IMULDIV_MULDIVREQ_MSG_FUNC_MULHSU) ? 2'd2 : 2'dx;
 
   //----------------------------------------------------------------------
   // Output Select
@@ -67,6 +73,7 @@ module imuldiv_IntMulDivIterative
     .reset              (reset),
     .mulreq_msg_a       (muldivreq_msg_a),
     .mulreq_msg_b       (muldivreq_msg_b),
+    .mulreq_mode        (mulreq_mode),
     .mulreq_val         (mulreq_val),
     .mulreq_rdy         (mulreq_rdy),
     .mulresp_msg_result (mulresp_msg_result),

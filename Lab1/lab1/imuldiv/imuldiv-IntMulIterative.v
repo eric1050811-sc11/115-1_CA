@@ -12,6 +12,7 @@ module imuldiv_IntMulIterative
 
   input  [31:0] mulreq_msg_a,
   input  [31:0] mulreq_msg_b,
+  input  [ 1:0] mulreq_mode,
   input         mulreq_val,
   output        mulreq_rdy,
 
@@ -38,6 +39,7 @@ module imuldiv_IntMulIterative
     .reset              (reset),
     .mulreq_msg_a       (mulreq_msg_a),
     .mulreq_msg_b       (mulreq_msg_b),
+    .mulreq_mode        (mulreq_mode),
     .mulresp_msg_result (mulresp_msg_result),
     .counter            (counter),
     .sign               (sign),
@@ -88,6 +90,7 @@ module imuldiv_IntMulIterativeDpath
 
   input  [31:0] mulreq_msg_a,
   input  [31:0] mulreq_msg_b,
+  input  [ 1:0] mulreq_mode,
   output [63:0] mulresp_msg_result,
 
   // Datapath Outputs
@@ -143,6 +146,8 @@ module imuldiv_IntMulIterativeDpath
 
   assign sign      = sign_reg;
 
+  wire   sign_a    = mulreq_msg_a[31]; // For mulhsu
+
   // Unsigned Operands
 
   wire [31:0] unsigned_a
@@ -153,15 +158,26 @@ module imuldiv_IntMulIterativeDpath
     = ( mulreq_msg_b[31] ) ? ~mulreq_msg_b + 1'b1
     :                         mulreq_msg_b;
 
+  // Operand Muxes Initial Inputs
+
+  wire [31:0] initial_a
+    = ( mulreq_mode == 2'd0) ? unsigned_a    // mul, mulh
+    : ( mulreq_mode == 2'd1) ? mulreq_msg_a  // mulhu
+    :                          unsigned_a;   // mulhsu
+
+  wire [31:0] initial_b
+    = ( mulreq_mode == 2'd0) ? unsigned_b    // mul, mulh
+    :                          mulreq_msg_b; // mulhu, mulhsu
+
   // Operand Muxes
 
   wire [63:0] a_mux_out
-    = ( a_mux_sel == op_load ) ? { 32'b0, unsigned_a }
+    = ( a_mux_sel == op_load ) ? { 32'b0, initial_a }
     : ( a_mux_sel == op_next ) ? a_shift_out
     :                            64'bx;
 
   wire [31:0]   b_mux_out
-    = ( b_mux_sel == op_load ) ? unsigned_b
+    = ( b_mux_sel == op_load ) ? initial_b
     : ( b_mux_sel == op_next ) ? b_shift_out
     :                            32'bx;
 
@@ -228,7 +244,10 @@ module imuldiv_IntMulIterativeDpath
 
   // Final Result
 
-  assign mulresp_msg_result = signed_result_mux_out;
+  assign mulresp_msg_result
+    = (mulreq_mode == 2'd0) ? signed_result_mux_out
+    : (mulreq_mode == 2'd1) ? result_reg
+    :              (sign_a) ? ~result_reg + 1'b1 : result_reg;
 
 endmodule
 
