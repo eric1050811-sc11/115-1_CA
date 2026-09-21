@@ -26,9 +26,11 @@ module riscv_CoreDpath
   input  [31:0] dmemresp_msg_data,
 
   // Controls Signals (ctrl->dpath)
-  
+
   input         imem_initial_fetch_Fhl,
   input   [1:0] pc_mux_sel_Phl,
+  input   [1:0] data0_byp_mux_sel_Dhl,
+  input   [1:0] data1_byp_mux_sel_Dhl,
   input   [1:0] op0_mux_sel_Dhl,
   input   [2:0] op1_mux_sel_Dhl,
   input  [31:0] inst_Dhl,
@@ -44,7 +46,7 @@ module riscv_CoreDpath
   input         wb_mux_sel_Mhl,
   input         rf_wen_Whl,
   input  [ 4:0] rf_waddr_Whl,
-  input         squash_Fhl,  
+  input         squash_Fhl,
   input         stall_Fhl,
   input         stall_Dhl,
   input         stall_Xhl,
@@ -52,6 +54,10 @@ module riscv_CoreDpath
   input         stall_Whl,
 
   // Control Signals (dpath->ctrl)
+
+  output  [4:0] inst_rd_Xhl,
+  output  [4:0] inst_rd_Mhl,
+  output  [4:0] inst_rd_Whl,
 
   output        branch_cond_eq_Xhl,
   output        branch_cond_ne_Xhl,
@@ -61,6 +67,11 @@ module riscv_CoreDpath
   output        branch_cond_geu_Xhl,
   output [31:0] proc2csr_data_Whl
 );
+
+  localparam BYP_NOBYP  = 2'd0;
+  localparam BYP_FROM_X = 2'd1;
+  localparam BYP_FROM_M = 2'd2;
+  localparam BYP_FROM_W = 2'd3;
 
   //--------------------------------------------------------------------
   // PC Logic Stage
@@ -90,7 +101,7 @@ module riscv_CoreDpath
     : ( pc_mux_sel_Phl == 2'd3 ) ? jumpreg_targ_Phl
     :                              32'bx;
 
-  // Since ID and EX stage don't stall with IF stage anymore, 
+  // Since ID and EX stage don't stall with IF stage anymore,
   // when branch taken happens, the correct pc (pc_mux_out_Phl) only lasts for a cycle.
   // so we have to latch it, and use it after the in-flight imem request comes back
   reg        pc_redirect_pending;
@@ -189,11 +200,28 @@ module riscv_CoreDpath
   wire [ 4:0] rf_raddr1_Dhl = inst_rs2_Dhl;
   wire [31:0] rf_rdata1_Dhl;
 
+  // Bypass mux select
+
+  wire [31:0] data0_byp_mux_out;
+  wire [31:0] data1_byp_mux_out;
+
+  assign data0_byp_mux_out
+    = ( data0_byp_mux_sel_Dhl == BYP_NOBYP  ) ? rf_rdata0_Dhl
+    : ( data0_byp_mux_sel_Dhl == BYP_FROM_X ) ? byp_Xhl
+    : ( data0_byp_mux_sel_Dhl == BYP_FROM_M ) ? byp_Mhl
+    : ( data0_byp_mux_sel_Dhl == BYP_FROM_W ) ? byp_Whl : 2'dx;
+
+  assign data1_byp_mux_out
+    = ( data1_byp_mux_sel_Dhl == BYP_NOBYP  ) ? rf_rdata1_Dhl
+    : ( data1_byp_mux_sel_Dhl == BYP_FROM_X ) ? byp_Xhl
+    : ( data1_byp_mux_sel_Dhl == BYP_FROM_M ) ? byp_Mhl
+    : ( data1_byp_mux_sel_Dhl == BYP_FROM_W ) ? byp_Whl : 2'dx;
+
   // Jump reg address
 
   wire [31:0] jumpreg_targ_Dhl;
 
-  wire [31:0] jumpreg_targ_pretruncate_Dhl = rf_rdata0_Dhl + imm_i_Dhl;
+  wire [31:0] jumpreg_targ_pretruncate_Dhl = data0_byp_mux_out + imm_i_Dhl;
   assign jumpreg_targ_Dhl  = {jumpreg_targ_pretruncate_Dhl[31:1], 1'b0};
 
   // Shift amount immediate
@@ -207,7 +235,7 @@ module riscv_CoreDpath
   // Operand 0 mux
 
   wire [31:0] op0_mux_out_Dhl
-    = ( op0_mux_sel_Dhl == 2'd0 ) ? rf_rdata0_Dhl
+    = ( op0_mux_sel_Dhl == 2'd0 ) ? data0_byp_mux_out
     : ( op0_mux_sel_Dhl == 2'd1 ) ? pc_Dhl
     : ( op0_mux_sel_Dhl == 2'd2 ) ? pc_plus4_Dhl
     : ( op0_mux_sel_Dhl == 2'd3 ) ? const0
@@ -216,7 +244,7 @@ module riscv_CoreDpath
   // Operand 1 mux
 
   wire [31:0] op1_mux_out_Dhl
-    = ( op1_mux_sel_Dhl == 3'd0 ) ? rf_rdata1_Dhl
+    = ( op1_mux_sel_Dhl == 3'd0 ) ? data1_byp_mux_out
     : ( op1_mux_sel_Dhl == 3'd1 ) ? shamt_Dhl
     : ( op1_mux_sel_Dhl == 3'd2 ) ? imm_u_Dhl
     : ( op1_mux_sel_Dhl == 3'd3 ) ? imm_sb_Dhl
@@ -227,7 +255,7 @@ module riscv_CoreDpath
 
   // wdata with bypassing
 
-  wire [31:0] wdata_Dhl = rf_rdata1_Dhl;
+  wire [31:0] wdata_Dhl = data1_byp_mux_out;
 
   //----------------------------------------------------------------------
   // X <- D
@@ -238,6 +266,7 @@ module riscv_CoreDpath
   reg [31:0] op0_mux_out_Xhl;
   reg [31:0] op1_mux_out_Xhl;
   reg [31:0] wdata_Xhl;
+  reg [ 4:0] inst_rd_Xhl_ff;
 
   always @ (posedge clk) begin
     if( !stall_Xhl ) begin
@@ -246,8 +275,11 @@ module riscv_CoreDpath
       op0_mux_out_Xhl <= op0_mux_out_Dhl;
       op1_mux_out_Xhl <= op1_mux_out_Dhl;
       wdata_Xhl       <= wdata_Dhl;
+      inst_rd_Xhl_ff  <= inst_rd_Dhl;
     end
   end
+
+  assign inst_rd_Xhl = inst_rd_Xhl_ff;
 
   //----------------------------------------------------------------------
   // Execute Stage
@@ -290,6 +322,10 @@ module riscv_CoreDpath
     : ( execute_mux_sel_Xhl == 1'd1 ) ? muldiv_mux_out_Xhl
     :                                   32'bx;
 
+  // Bypass line
+
+  wire [31:0] byp_Xhl = execute_mux_out_Xhl;
+
   //----------------------------------------------------------------------
   // M <- X
   //----------------------------------------------------------------------
@@ -297,14 +333,18 @@ module riscv_CoreDpath
   reg  [31:0] pc_Mhl;
   reg  [31:0] execute_mux_out_Mhl;
   reg  [31:0] wdata_Mhl;
+  reg  [ 4:0] inst_rd_Mhl_ff;
 
   always @ (posedge clk) begin
     if( !stall_Mhl ) begin
       pc_Mhl              <= pc_Xhl;
       execute_mux_out_Mhl <= execute_mux_out_Xhl;
       wdata_Mhl           <= wdata_Xhl;
+      inst_rd_Mhl_ff <= inst_rd_Xhl;
     end
   end
+
+  assign inst_rd_Mhl = inst_rd_Mhl_ff;
 
   //----------------------------------------------------------------------
   // Memory Stage
@@ -332,7 +372,6 @@ module riscv_CoreDpath
     : ( dmemresp_mux_sel_Mhl == 3'd4 ) ? dmemresp_lhu_Mhl
     :                                    32'bx;
 
-
   //----------------------------------------------------------------------
   // Writeback mux
   //----------------------------------------------------------------------
@@ -342,19 +381,27 @@ module riscv_CoreDpath
     : ( wb_mux_sel_Mhl == 1'd1 ) ? dmemresp_mux_out_Mhl
     :                              32'bx;
 
+  // Bypass line
+
+  wire [31:0] byp_Mhl = wb_mux_out_Mhl;
+
   //----------------------------------------------------------------------
   // W <- M
   //----------------------------------------------------------------------
 
   reg  [31:0] pc_Whl;
   reg  [31:0] wb_mux_out_Whl;
+  reg  [ 4:0] inst_rd_Whl_ff;
 
   always @ (posedge clk) begin
     if( !stall_Whl ) begin
       pc_Whl                 <= pc_Mhl;
       wb_mux_out_Whl         <= wb_mux_out_Mhl;
+      inst_rd_Whl_ff         <= inst_rd_Mhl;
     end
   end
+
+  assign inst_rd_Whl = inst_rd_Whl_ff;
 
   //----------------------------------------------------------------------
   // Writeback Stage
@@ -363,6 +410,10 @@ module riscv_CoreDpath
   // CSR write data
 
   assign proc2csr_data_Whl = wb_mux_out_Whl;
+
+  // Bypass line
+
+  wire [31:0] byp_Whl = wb_mux_out_Whl;
 
   //----------------------------------------------------------------------
   // Debug registers for instruction disassembly
@@ -373,11 +424,11 @@ module riscv_CoreDpath
   always @ ( posedge clk ) begin
     pc_debug <= pc_Whl;
   end
-  
+
   //----------------------------------------------------------------------
   // Submodules
   //----------------------------------------------------------------------
-  
+
   // Address Generation
 
   riscv_InstMsgFromBits inst_msg_from_bits

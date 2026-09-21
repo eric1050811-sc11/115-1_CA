@@ -45,7 +45,7 @@ module riscv_Core
 
   // Retire Interface
 
-  output        retire_valid  
+  output        retire_valid
 );
 
   wire [31:0] imemreq_msg_addr;
@@ -59,6 +59,8 @@ module riscv_Core
   wire [31:0] dmemresp_msg_data;
 
   wire  [1:0] pc_mux_sel_Phl;
+  wire  [1:0] data0_byp_mux_sel_Dhl;
+  wire  [1:0] data1_byp_mux_sel_Dhl;
   wire  [1:0] op0_mux_sel_Dhl;
   wire  [2:0] op1_mux_sel_Dhl;
   wire [31:0] inst_Dhl;
@@ -82,6 +84,10 @@ module riscv_Core
   wire        squash_Fhl;
   wire        imem_initial_fetch_Fhl;
   wire        imemreq_pending_Fhl;
+
+  wire  [4:0] inst_rd_Xhl;
+  wire  [4:0] inst_rd_Mhl;
+  wire  [4:0] inst_rd_Whl;
 
   wire        branch_cond_eq_Xhl;
   wire        branch_cond_ne_Xhl;
@@ -110,7 +116,7 @@ module riscv_Core
   assign imemreq_msg_addr
     = imemreq_pending_Fhl ? imemreq_msg_addr_hold
     :                       imemreq_msg_addr_next;
-    
+
   vc_MemReqMsgToBits#(32,32) imemreq_msg_to_bits
   (
     .type (`VC_MEM_REQ_MSG_TYPE_READ),
@@ -179,6 +185,8 @@ module riscv_Core
     // Controls Signals (ctrl->dpath)
 
     .pc_mux_sel_Phl         (pc_mux_sel_Phl),
+    .data0_byp_mux_sel_Dhl  (data0_byp_mux_sel_Dhl),
+    .data1_byp_mux_sel_Dhl  (data1_byp_mux_sel_Dhl),
     .op0_mux_sel_Dhl        (op0_mux_sel_Dhl),
     .op1_mux_sel_Dhl        (op1_mux_sel_Dhl),
     .inst_Dhl               (inst_Dhl),
@@ -194,7 +202,7 @@ module riscv_Core
     .wb_mux_sel_Mhl         (wb_mux_sel_Mhl),
     .rf_wen_out_Whl         (rf_wen_Whl),
     .rf_waddr_Whl           (rf_waddr_Whl),
-    .squash_Fhl             (squash_Fhl),    
+    .squash_Fhl             (squash_Fhl),
     .stall_Fhl              (stall_Fhl),
     .stall_Dhl              (stall_Dhl),
     .stall_Xhl              (stall_Xhl),
@@ -202,6 +210,10 @@ module riscv_Core
     .stall_Whl              (stall_Whl),
 
     // Control Signals (dpath->ctrl)
+
+    .inst_rd_Xhl            (inst_rd_Xhl),
+    .inst_rd_Mhl            (inst_rd_Mhl),
+    .inst_rd_Whl            (inst_rd_Whl),
 
     .branch_cond_eq_Xhl	    (branch_cond_eq_Xhl),
     .branch_cond_ne_Xhl	    (branch_cond_ne_Xhl),
@@ -217,7 +229,7 @@ module riscv_Core
 
     // Retire Interface
 
-    .retire_valid           (retire_valid)   
+    .retire_valid           (retire_valid)
   );
 
   //----------------------------------------------------------------------
@@ -242,6 +254,8 @@ module riscv_Core
     // Controls Signals (ctrl->dpath)
     .imem_initial_fetch_Fhl  (imem_initial_fetch_Fhl),
     .pc_mux_sel_Phl          (pc_mux_sel_Phl),
+    .data0_byp_mux_sel_Dhl   (data0_byp_mux_sel_Dhl),
+    .data1_byp_mux_sel_Dhl   (data1_byp_mux_sel_Dhl),
     .op0_mux_sel_Dhl         (op0_mux_sel_Dhl),
     .op1_mux_sel_Dhl         (op1_mux_sel_Dhl),
     .inst_Dhl                (inst_Dhl),
@@ -257,7 +271,7 @@ module riscv_Core
     .wb_mux_sel_Mhl          (wb_mux_sel_Mhl),
     .rf_wen_Whl              (rf_wen_Whl),
     .rf_waddr_Whl            (rf_waddr_Whl),
-    .squash_Fhl              (squash_Fhl),    
+    .squash_Fhl              (squash_Fhl),
     .stall_Fhl               (stall_Fhl),
     .stall_Dhl               (stall_Dhl),
     .stall_Xhl               (stall_Xhl),
@@ -265,6 +279,10 @@ module riscv_Core
     .stall_Whl               (stall_Whl),
 
     // Control Signals (dpath->ctrl)
+
+    .inst_rd_Xhl             (inst_rd_Xhl),
+    .inst_rd_Mhl             (inst_rd_Mhl),
+    .inst_rd_Whl             (inst_rd_Whl),
 
     .branch_cond_eq_Xhl	     (branch_cond_eq_Xhl),
     .branch_cond_ne_Xhl	     (branch_cond_ne_Xhl),

@@ -103,7 +103,7 @@ subpkgs = \
   riscvstall \
 
 # Enable these after running their setup.sh scripts.
-# subpkgs += riscvbyp
+subpkgs += riscvbyp
 # subpkgs += riscvlong
 
 subpkgs_mk := \
@@ -148,7 +148,7 @@ sim_incs = \
   -I $(topdir)/riscvstall \
 
 # Enable these after running their setup.sh scripts.
-# sim_incs += -I $(topdir)/riscvbyp
+sim_incs += -I $(topdir)/riscvbyp
 # sim_incs += -I $(topdir)/riscvlong
 
 PATTERN_DEFAULT_MAX_CYCLES      ?= 100000
@@ -209,7 +209,7 @@ endef
 $(eval $(call proc_template,riscvstall,RISCVSTALL,stall))
 
 # Enable these after running their setup.sh scripts.
-# $(eval $(call proc_template,riscvbyp,RISCVBYP,byp))
+$(eval $(call proc_template,riscvbyp,RISCVBYP,byp))
 # $(eval $(call proc_template,riscvlong,RISCVLONG,long))
 
 #-------------------------------------------------------------------------
@@ -248,11 +248,11 @@ endef
 $(eval $(call asm_template,riscvstall,RISCVSTALL,stall))
 
 # Enable these after running their setup.sh scripts.
-# $(eval $(call asm_template,riscvbyp,RISCVBYP,byp))
+$(eval $(call asm_template,riscvbyp,RISCVBYP,byp))
 # $(eval $(call asm_template,riscvlong,RISCVLONG,long))
 
-check-asm : check-asm-riscvstall
-check-asm-rand : check-asm-rand-riscvstall
+check-asm : check-asm-riscvbyp
+check-asm-rand : check-asm-rand-riscvbyp
 
 .PHONY : check-asm check-asm-rand
 
@@ -291,7 +291,7 @@ endef
 $(eval $(call bmark_template,riscvstall,RISCVSTALL,stall))
 
 # Enable these after running their setup.sh scripts.
-# $(eval $(call bmark_template,riscvbyp,RISCVBYP,byp))
+$(eval $(call bmark_template,riscvbyp,RISCVBYP,byp))
 # $(eval $(call bmark_template,riscvlong,RISCVLONG,long))
 
 #-------------------------------------------------------------------------

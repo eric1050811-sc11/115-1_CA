@@ -31,6 +31,8 @@ module riscv_CoreCtrl
   // Controls Signals (ctrl->dpath)
 
   output      [1:0]   pc_mux_sel_Phl,
+  output      [1:0]   data0_byp_mux_sel_Dhl,
+  output      [1:0]   data1_byp_mux_sel_Dhl,
   output      [1:0]   op0_mux_sel_Dhl,
   output      [2:0]   op1_mux_sel_Dhl,
   output      [31:0]  inst_Dhl,
@@ -46,7 +48,7 @@ module riscv_CoreCtrl
   output reg          wb_mux_sel_Mhl,
   output              rf_wen_out_Whl,
   output reg  [4:0]   rf_waddr_Whl,
-  output              squash_Fhl,  
+  output              squash_Fhl,
   output              stall_Fhl,
   output              stall_Dhl,
   output              stall_Xhl,
@@ -54,6 +56,10 @@ module riscv_CoreCtrl
   output              stall_Whl,
 
   // Control Signals (dpath->ctrl)
+
+  input         [4:0] inst_rd_Xhl,
+  input         [4:0] inst_rd_Mhl,
+  input         [4:0] inst_rd_Whl,
 
   input               branch_cond_eq_Xhl,
   input               branch_cond_ne_Xhl,
@@ -69,7 +75,7 @@ module riscv_CoreCtrl
 
   // Retire Interface
 
-  output            retire_valid  
+  output            retire_valid
 );
 
   //----------------------------------------------------------------------
@@ -114,7 +120,6 @@ module riscv_CoreCtrl
   //----------------------------------------------------------------------
   // Fetch Stage: Instruction Memory Response
   //----------------------------------------------------------------------
-
 
   localparam imem_idle = 1'b0;
   localparam imem_wait = 1'b1;
@@ -171,6 +176,19 @@ module riscv_CoreCtrl
 
   // req_val has to stay high while the request is pending
   assign imemreq_val = imemreq_pending_Fhl || imemreq_start_Fhl;
+
+  // Bypass mux select
+  assign data0_byp_mux_sel_Dhl
+    = (inst_rs1_Dhl == inst_rd_Xhl && inst_val_Xhl && rf_wen_Xhl && ( rf_waddr_Xhl != 5'd0 )) ? 2'd1
+    : (inst_rs1_Dhl == inst_rd_Mhl && inst_val_Mhl && rf_wen_Mhl && ( rf_waddr_Mhl != 5'd0 )) ? 2'd2
+    : (inst_rs1_Dhl == inst_rd_Whl && inst_val_Whl && rf_wen_Whl && ( rf_waddr_Whl != 5'd0 )) ? 2'd3
+    : 2'd0;
+
+  assign data1_byp_mux_sel_Dhl
+    = (inst_rs2_Dhl == inst_rd_Xhl && inst_val_Xhl && rf_wen_Xhl && ( rf_waddr_Xhl != 5'd0 )) ? 2'd1
+    : (inst_rs2_Dhl == inst_rd_Mhl && inst_val_Mhl && rf_wen_Mhl && ( rf_waddr_Mhl != 5'd0 )) ? 2'd2
+    : (inst_rs2_Dhl == inst_rd_Whl && inst_val_Whl && rf_wen_Whl && ( rf_waddr_Whl != 5'd0 )) ? 2'd3
+    : 2'd0;
 
 
   //---------------------------------
@@ -556,25 +574,33 @@ module riscv_CoreCtrl
   // Stall for data hazards if either of the operand read addresses are
   // the same as the write addresses of instruction later in the pipeline
 
-  wire stall_hazard_Dhl   = inst_val_Dhl && (
-                            ( rs1_en_Dhl && inst_val_Xhl && rf_wen_Xhl
-                              && ( rs1_addr_Dhl == rf_waddr_Xhl )
-                              && ( rf_waddr_Xhl != 5'd0 ) )
-                         || ( rs1_en_Dhl && inst_val_Mhl && rf_wen_Mhl
-                              && ( rs1_addr_Dhl == rf_waddr_Mhl )
-                              && ( rf_waddr_Mhl != 5'd0 ) )
-                         || ( rs1_en_Dhl && inst_val_Whl && rf_wen_Whl
-                              && ( rs1_addr_Dhl == rf_waddr_Whl )
-                              && ( rf_waddr_Whl != 5'd0 ) )
-                         || ( rs2_en_Dhl && inst_val_Xhl && rf_wen_Xhl
-                              && ( rs2_addr_Dhl == rf_waddr_Xhl )
-                              && ( rf_waddr_Xhl != 5'd0 ) )
-                         || ( rs2_en_Dhl && inst_val_Mhl && rf_wen_Mhl
-                              && ( rs2_addr_Dhl == rf_waddr_Mhl )
-                              && ( rf_waddr_Mhl != 5'd0 ) )
-                         || ( rs2_en_Dhl && inst_val_Whl && rf_wen_Whl
-                              && ( rs2_addr_Dhl == rf_waddr_Whl )
-                              && ( rf_waddr_Whl != 5'd0 ) ) );
+  // wire stall_hazard_Dhl   = inst_val_Dhl && (
+  //                           ( rs1_en_Dhl && inst_val_Xhl && rf_wen_Xhl
+  //                             && ( rs1_addr_Dhl == rf_waddr_Xhl )
+  //                             && ( rf_waddr_Xhl != 5'd0 ) )
+  //                        || ( rs1_en_Dhl && inst_val_Mhl && rf_wen_Mhl
+  //                             && ( rs1_addr_Dhl == rf_waddr_Mhl )
+  //                             && ( rf_waddr_Mhl != 5'd0 ) )
+  //                        || ( rs1_en_Dhl && inst_val_Whl && rf_wen_Whl
+  //                             && ( rs1_addr_Dhl == rf_waddr_Whl )
+  //                             && ( rf_waddr_Whl != 5'd0 ) )
+  //                        || ( rs2_en_Dhl && inst_val_Xhl && rf_wen_Xhl
+  //                             && ( rs2_addr_Dhl == rf_waddr_Xhl )
+  //                             && ( rf_waddr_Xhl != 5'd0 ) )
+  //                        || ( rs2_en_Dhl && inst_val_Mhl && rf_wen_Mhl
+  //                             && ( rs2_addr_Dhl == rf_waddr_Mhl )
+  //                             && ( rf_waddr_Mhl != 5'd0 ) )
+  //                        || ( rs2_en_Dhl && inst_val_Whl && rf_wen_Whl
+  //                             && ( rs2_addr_Dhl == rf_waddr_Whl )
+  //                             && ( rf_waddr_Whl != 5'd0 ) ) );
+
+  // The following is bypass version
+  // Only need to consider a load to rd in X bypass
+  wire stall_hazard_Dhl   = inst_val_Dhl && inst_val_Xhl &&
+                            !dmemreq_msg_rw_Xhl && dmemreq_val_Xhl &&
+                            ( rf_waddr_Xhl != 5'd0 ) &&
+                            (( rs1_en_Dhl && ( rs1_addr_Dhl == rf_waddr_Xhl )) ||
+                             ( rs2_en_Dhl && ( rs2_addr_Dhl == rf_waddr_Xhl )));
 
   // Aggregate Stall Signal
 
@@ -742,7 +768,7 @@ module riscv_CoreCtrl
   // Stall in M if memory response is not returned for a valid request
 
   wire stall_dmem_Mhl = ( !reset && dmemreq_val_Mhl && inst_val_Mhl && !dmemresp_val );
-  
+
   // Aggregate Stall Signal
 
   assign stall_Mhl = stall_dmem_Mhl ;
