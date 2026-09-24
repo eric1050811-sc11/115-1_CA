@@ -44,3 +44,35 @@ Both `imuldiv-IntMulIterative.v` and `imuldiv-IntMulDivIterative.v` are implemen
 
 After these changes `riscvbyp` passes the same asm/bmark tests as `riscvstall` with far fewer stall cycles from RAW hazards.
 
+## Objective 4
+
+`riscvbyp`'s muldiv unit is iterative and stalls the *whole* pipeline for the entire multiply/divide latency. This objective swaps it for the provided 4-stage *pipelined* unit (`riscvlong-CoreDpathPipeMulDiv.v`) and extends the pipeline by two stages (`X2`, `X3`, inserted between `M` and `W`) so that latency has somewhere to live: `F -> D -> X -> M -> X2 -> X3 -> W`.
+
+1. Enable `riscvlong` in `lab1/build/Makefile` - same pattern as Objective 3: uncomment `subpkgs += riscvlong`, `sim_incs += -I $(topdir)/riscvlong`, and the `proc_template`/`asm_template`/`bmark_template` calls for `riscvlong`.
+
+2. `riscvlong-CoreDpathPipeMulDiv.v` - finish the provided skeleton:
+    - Add `MULHU`/`MULHSU` to the `result0` mux. `mulh` needs no new case - it reuses the plain `MUL` funct code, since it's the same 64-bit signed product as `mul`, just takes the upper half downstream via `mdm_u`. `mulhu` is genuinely unsigned: `a_reg * b_reg` directly, no sign correction at all. `mulhsu`'s `b` is unsigned and must stay raw. Use a dedicated `product_su_raw = a_unsign * b_reg`, sign-corrected using only `a_reg[31]` (the same single-operand-sign pattern the file already uses for `remainder`).
+    - Split the one shared `stall` wire that gated both `result2_reg` and `result3_reg` into separate `stall_X2hl`/`stall_X3hl` gates, one per register, and added the missing `val3_next` wire following the same "invalid if my producer stage was stalled, else inherit its validity" pattern already used for `val1_next`/`val2_next`.
+    - `muldivreq_rdy` needs to depend on all four stall stages (`stall_Xhl/Mhl/X2hl/X3hl`), not just the response side.
+
+3. Feed the muldiv unit from D, not X: `muldivreq_msg_a/b`, `muldivreq_msg_fn`, and `muldivreq_val` all come from D-stage decode/bypass signals now, not X-stage latched copies. Reason is that the unit's own `a_reg`/`b_reg`/`fn_reg` *are* its D->X latch (loaded on `muldivreq_go`, at the D->X edge) - feeding it already-latched X-stage values would double-register the operand and shift its internal 4 stages one slot later than X/M/X2/X3, breaking the intended stage alignment (would need a 5th extra stage instead of 2).
+
+4. `riscvlong-CoreDpath.v` - extend the pipeline:
+    - Add real `X2`/`X3` stages threading `pc`, `inst_rd`, `muldiv_mux_sel` forward.
+    - Resolve the writeback value in two steps: an early ALU-vs-mem resolution at `M` (kept as `tmp_wb_mux_out_*`, carried forward through X2/X3 for bypass purposes), and the final ALU/mem-vs-muldiv resolution at `X3` (gated by a new `wb_mux_sel_X3hl` input from ctrl).
+    - Add `byp_X2hl`/`byp_X3hl` and new `BYP_FROM_X2`/`BYP_FROM_X3` encodings - needs widening `data0/1_byp_mux_sel_Dhl` from 2 bits to 3 bits everywhere (ctrl output, dpath input, `Core.v` wire) to fit 6 bypass sources instead of 4.
+    - Export `inst_rd_X2hl`/`inst_rd_X3hl` as new dpath->ctrl ports (same `_ff` pattern as the existing `inst_rd_Xhl/Mhl/Whl`) so ctrl's bypass-select logic can reach them.
+    - Gotchas along the way: a `wb_mux_out_Mhl`-style wire commented out but still referenced elsewhere (dangling reference -> implicit 1-bit wire -> silent truncation); the `W <- X3` register block still reading stale `M`-stage signals after the section header was renamed to `X3`; `byp_X2hl` driven by a bare `assign` with no prior `wire [31:0]` declaration (same implicit-1-bit-wire trap); a `muldiv_mux_sel_X2hl <= muldiv_mux_sel_Xhl` chain-skip that reached two stages back instead of one, tagging the wrong instruction's mul/div half-select.
+
+5. `riscvlong-CoreCtrl.v` - the control side:
+    - Add `X2`/`X3` shadow-pipeline registers (`bubble`, `rf_wen`, `rf_waddr`, `csr_wen/addr`, `inst_val`), mirroring the existing `M`/`W` pattern exactly.
+    - `stall_X2hl`/`stall_X3hl` are both just `1'b0` - nothing downstream of X2/X3 ever refuses (`W` never stalls, and neither X2 nor X3 have a local reason to stall on their own), and `stall_Mhl` folds in `stall_X2hl` to keep the standard backpressure chain (`stall_Xhl <- stall_Mhl <- stall_X2hl <- stall_X3hl`) intact.
+    - Extend `data0/1_byp_mux_sel_Dhl` with X2/X3 branches, same shape as the existing X/M/W ones.
+    - Remove `stall_muldiv_Xhl` (`muldivreq_val_Xhl && inst_val_Xhl && !muldivresp_val`) entirely - leftover from the old iterative unit. With the pipelined unit, `muldivresp_val` only turns true 3 cycles after the request starts, but the muldiv unit's own `result1/2/3_reg` keep shifting forward every cycle regardless of `stall_Xhl`. Keeping this stall would freeze X's shadow-pipeline bookkeeping for 3 cycles while the *real* muldiv result silently races ahead to X3 - by the time the stall clears, ctrl's notion of "which instruction is at X3" is 3 stages stale.
+    - Drive `wb_mux_sel_X3hl` by threading `wb_mux_sel`/`execute_mux_sel` forward through new `X2hl`/`X3hl` regs, then combining them: `wb_mux_sel_X2hl==wm_alu && execute_mux_sel_X2hl==em_md`. First attempt used `execute_mux_sel` alone - wrong, because it's don't-care (`em_x`) for any load/store, which never goes through the execute mux at all; `wb_mux_sel` is always concrete and masks that don't-care before it can matter.
+    - Add `stall_muldiv_hazard_Dhl`: a load-use-style stall, but for a muldiv producer sitting anywhere in X/M/X2 (not ready until X3) that a dependent instruction in D needs right now.
+
+6. The bug that only showed up on an actual simulation run: `stall_muldiv_hazard_Dhl` reused the same `wb_mux_sel==wm_alu && execute_mux_sel==em_md` condition from item 5, but **branches** have *both* `wb_mux_sel` and `execute_mux_sel` set to don't-care (`wm_x`/`em_x`) in the decode table, since they never write anything back. So whenever a branch sat in X/M/X2, the whole condition evaluated to `x`, propagated straight through `stall_muldiv_hazard_Dhl` into `stall_Dhl`, and corrupted `imemreq_val`/`imemresp_rdy` (both computed from `!stall_Dhl`) - the sim ran the full test to its 1,000,000-cycle timeout with continuous `x assertion failed` errors on `memreq0_val`/`memresp0_rdy`, since branches occur in essentially every test. Fix: add back the `rf_wen_Xhl/Mhl/X2hl` check that I'd earlier dismissed as "redundant" - it's the one signal that's reliably concrete (`0`) for branches, and masks the don't-care `wb_mux_sel`/`execute_mux_sel` before the `x` can propagate anywhere.
+
+After all of this, `riscvlong` passes the full asm test suite. Extending the pipeline adds two stages of latency to every instruction, not just muldiv, as expected - but the processor no longer stalls for the full muldiv latency on unrelated instructions the way the iterative design did.
+

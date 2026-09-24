@@ -149,7 +149,7 @@ sim_incs = \
 
 # Enable these after running their setup.sh scripts.
 sim_incs += -I $(topdir)/riscvbyp
-# sim_incs += -I $(topdir)/riscvlong
+sim_incs += -I $(topdir)/riscvlong
 
 PATTERN_DEFAULT_MAX_CYCLES      ?= 100000
 RAND_PATTERN_DEFAULT_MAX_CYCLES ?= 500000
@@ -210,7 +210,7 @@ $(eval $(call proc_template,riscvstall,RISCVSTALL,stall))
 
 # Enable these after running their setup.sh scripts.
 $(eval $(call proc_template,riscvbyp,RISCVBYP,byp))
-# $(eval $(call proc_template,riscvlong,RISCVLONG,long))
+$(eval $(call proc_template,riscvlong,RISCVLONG,long))
 
 #-------------------------------------------------------------------------
 # Assembly test rules
@@ -249,7 +249,7 @@ $(eval $(call asm_template,riscvstall,RISCVSTALL,stall))
 
 # Enable these after running their setup.sh scripts.
 $(eval $(call asm_template,riscvbyp,RISCVBYP,byp))
-# $(eval $(call asm_template,riscvlong,RISCVLONG,long))
+$(eval $(call asm_template,riscvlong,RISCVLONG,long))
 
 check-asm : check-asm-riscvbyp
 check-asm-rand : check-asm-rand-riscvbyp
@@ -292,7 +292,7 @@ $(eval $(call bmark_template,riscvstall,RISCVSTALL,stall))
 
 # Enable these after running their setup.sh scripts.
 $(eval $(call bmark_template,riscvbyp,RISCVBYP,byp))
-# $(eval $(call bmark_template,riscvlong,RISCVLONG,long))
+$(eval $(call bmark_template,riscvlong,RISCVLONG,long))
 
 #-------------------------------------------------------------------------
 # Aggregate targets

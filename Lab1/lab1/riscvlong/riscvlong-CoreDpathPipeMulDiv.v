@@ -21,7 +21,8 @@ module riscv_CoreDpathPipeMulDiv
   output [63:0] muldivresp_msg_result,
   output        muldivresp_val,
   input         muldivresp_rdy,
-  //These need to be hooked up to something!
+
+  // These need to be hooked up to something!
   input         stall_Xhl,
   input         stall_Mhl,
   input         stall_X2hl,
@@ -30,7 +31,7 @@ module riscv_CoreDpathPipeMulDiv
 
   // Set request ready if not stalled
 
-  assign muldivreq_rdy = !stall;
+  assign muldivreq_rdy = !stall_Xhl;
   wire   muldivreq_go  = muldivreq_val && muldivreq_rdy;
 
   //----------------------------------------------------------------------
@@ -48,9 +49,10 @@ module riscv_CoreDpathPipeMulDiv
   reg        val1_reg;
   reg        val2_reg;
   reg        val3_reg;
-  wire val1_next = (stall_Xhl) ? 1'b0: (val0_reg);
-  wire val2_next = (stall_Mhl) ? 1'b0: (val1_reg);
- 
+  wire val1_next =  (stall_Xhl) ? 1'b0: (val0_reg);
+  wire val2_next =  (stall_Mhl) ? 1'b0: (val1_reg);
+  wire val3_next = (stall_X2hl) ? 1'b0: (val2_reg);
+
   always @ ( posedge clk ) begin
     if ( reset ) begin
       fn_reg <= 0;
@@ -78,17 +80,19 @@ module riscv_CoreDpathPipeMulDiv
           result1_reg <= result0;
           val1_reg <= val1_next;
       end
-      if ( !stall  ) begin
+      if ( !stall_X2hl ) begin
         result2_reg <= result1_reg;
-        result3_reg <= result2_reg;
         val2_reg    <= val2_next;
-        val3_reg    <= val2_reg;
+      end
+      if ( !stall_X3hl ) begin
+        result3_reg <= result2_reg;
+        val3_reg    <= val3_next;
       end
     end
   end
   
 
- 
+
   //----------------------------------------------------------------------
   // Functional Computation
   //----------------------------------------------------------------------
@@ -96,6 +100,7 @@ module riscv_CoreDpathPipeMulDiv
   // Sign of mul and div
 
   wire sign = ( a_reg[31] ^ b_reg[31] );
+  wire asign = a_reg[31];
 
   // Unsigned operands
 
@@ -121,6 +126,17 @@ module riscv_CoreDpathPipeMulDiv
     = ( sign ) ? ( ~product_raw + 1'b1 )
                : product_raw;
 
+  // Unsigned Product
+
+  wire [63:0] productu = a_reg * b_reg;
+
+  // Signed Unsigned Product
+
+  wire [63:0] productsu_raw = a_unsign * b_reg;
+  wire [63:0] productsu
+    = ( asign ) ? ( ~productsu_raw + 1'b1 )
+                : productsu_raw;
+
   // Signed Quotient
 
   wire [31:0] quotient
@@ -141,6 +157,8 @@ module riscv_CoreDpathPipeMulDiv
     : ( fn_reg == `IMULDIV_MULDIVREQ_MSG_FUNC_DIVU ) ? { remainderu, quotientu }
     : ( fn_reg == `IMULDIV_MULDIVREQ_MSG_FUNC_REM  ) ? { remainder, quotient }
     : ( fn_reg == `IMULDIV_MULDIVREQ_MSG_FUNC_REMU ) ? { remainderu, quotientu }
+    : ( fn_reg == `IMULDIV_MULDIVREQ_MSG_FUNC_MULHU) ? productu
+    : ( fn_reg == `IMULDIV_MULDIVREQ_MSG_FUNC_MULHSU)? productsu
     :                                                  32'bx;
 
   //----------------------------------------------------------------------

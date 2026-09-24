@@ -9,6 +9,7 @@
 `include "vc-MemRespMsg.v"
 `include "riscvlong-CoreCtrl.v"
 `include "riscvlong-CoreDpath.v"
+`include "riscvlong-CoreDpathPipeMulDiv.v"
 
 module riscv_Core
 (
@@ -59,13 +60,16 @@ module riscv_Core
   wire [31:0] dmemresp_msg_data;
 
   wire  [1:0] pc_mux_sel_Phl;
-  wire  [1:0] data0_byp_mux_sel_Dhl;
-  wire  [1:0] data1_byp_mux_sel_Dhl;
+  wire  [2:0] data0_byp_mux_sel_Dhl;
+  wire  [2:0] data1_byp_mux_sel_Dhl;
   wire  [1:0] op0_mux_sel_Dhl;
   wire  [2:0] op1_mux_sel_Dhl;
   wire [31:0] inst_Dhl;
   wire  [3:0] alu_fn_Xhl;
+  wire  [2:0] muldivreq_msg_fn_Dhl;
   wire  [2:0] muldivreq_msg_fn_Xhl;
+  wire        muldivreq_val_Dhl;
+  wire        muldivreq_rdy_Dhl;
   wire        muldivreq_val;
   wire        muldivreq_rdy;
   wire        muldivresp_val;
@@ -74,12 +78,15 @@ module riscv_Core
   wire        execute_mux_sel_Xhl;
   wire  [2:0] dmemresp_mux_sel_Mhl;
   wire        wb_mux_sel_Mhl;
+  wire        wb_mux_sel_X3hl;
   wire        rf_wen_Whl;
   wire  [4:0] rf_waddr_Whl;
   wire        stall_Fhl;
   wire        stall_Dhl;
   wire        stall_Xhl;
   wire        stall_Mhl;
+  wire        stall_X2hl;
+  wire        stall_X3hl;
   wire        stall_Whl;
   wire        squash_Fhl;
   wire        imem_initial_fetch_Fhl;
@@ -87,6 +94,8 @@ module riscv_Core
 
   wire  [4:0] inst_rd_Xhl;
   wire  [4:0] inst_rd_Mhl;
+  wire  [4:0] inst_rd_X2hl;
+  wire  [4:0] inst_rd_X3hl;
   wire  [4:0] inst_rd_Whl;
 
   wire        branch_cond_eq_Xhl;
@@ -173,6 +182,7 @@ module riscv_Core
     .imemresp_rdy           (imemresp_rdy),
     .imem_initial_fetch_Fhl (imem_initial_fetch_Fhl),
     .imemreq_pending_Fhl    (imemreq_pending_Fhl),
+
     // Data Memory Port
 
     .dmemreq_msg_rw         (dmemreq_msg_rw),
@@ -191,7 +201,10 @@ module riscv_Core
     .op1_mux_sel_Dhl        (op1_mux_sel_Dhl),
     .inst_Dhl               (inst_Dhl),
     .alu_fn_Xhl             (alu_fn_Xhl),
+    .muldivreq_msg_fn_Dhl   (muldivreq_msg_fn_Dhl),
     .muldivreq_msg_fn_Xhl   (muldivreq_msg_fn_Xhl),
+    .muldivreq_val_Dhl      (muldivreq_val_Dhl),
+    .muldivreq_rdy_Dhl      (muldivreq_rdy_Dhl),
     .muldivreq_val          (muldivreq_val),
     .muldivreq_rdy          (muldivreq_rdy),
     .muldivresp_val         (muldivresp_val),
@@ -200,6 +213,7 @@ module riscv_Core
     .execute_mux_sel_Xhl    (execute_mux_sel_Xhl),
     .dmemresp_mux_sel_Mhl   (dmemresp_mux_sel_Mhl),
     .wb_mux_sel_Mhl         (wb_mux_sel_Mhl),
+    .wb_mux_sel_X3hl        (wb_mux_sel_X3hl),
     .rf_wen_out_Whl         (rf_wen_Whl),
     .rf_waddr_Whl           (rf_waddr_Whl),
     .squash_Fhl             (squash_Fhl),
@@ -207,12 +221,16 @@ module riscv_Core
     .stall_Dhl              (stall_Dhl),
     .stall_Xhl              (stall_Xhl),
     .stall_Mhl              (stall_Mhl),
+    .stall_X2hl             (stall_X2hl),
+    .stall_X3hl             (stall_X3hl),
     .stall_Whl              (stall_Whl),
 
     // Control Signals (dpath->ctrl)
 
     .inst_rd_Xhl            (inst_rd_Xhl),
     .inst_rd_Mhl            (inst_rd_Mhl),
+    .inst_rd_X2hl           (inst_rd_X2hl),
+    .inst_rd_X3hl           (inst_rd_X3hl),
     .inst_rd_Whl            (inst_rd_Whl),
 
     .branch_cond_eq_Xhl	    (branch_cond_eq_Xhl),
@@ -260,7 +278,10 @@ module riscv_Core
     .op1_mux_sel_Dhl         (op1_mux_sel_Dhl),
     .inst_Dhl                (inst_Dhl),
     .alu_fn_Xhl              (alu_fn_Xhl),
+    .muldivreq_msg_fn_Dhl    (muldivreq_msg_fn_Dhl),
     .muldivreq_msg_fn_Xhl    (muldivreq_msg_fn_Xhl),
+    .muldivreq_val_Dhl       (muldivreq_val_Dhl),
+    .muldivreq_rdy_Dhl       (muldivreq_rdy_Dhl),
     .muldivreq_val           (muldivreq_val),
     .muldivreq_rdy           (muldivreq_rdy),
     .muldivresp_val          (muldivresp_val),
@@ -269,6 +290,7 @@ module riscv_Core
     .execute_mux_sel_Xhl     (execute_mux_sel_Xhl),
     .dmemresp_mux_sel_Mhl    (dmemresp_mux_sel_Mhl),
     .wb_mux_sel_Mhl          (wb_mux_sel_Mhl),
+    .wb_mux_sel_X3hl         (wb_mux_sel_X3hl),
     .rf_wen_Whl              (rf_wen_Whl),
     .rf_waddr_Whl            (rf_waddr_Whl),
     .squash_Fhl              (squash_Fhl),
@@ -276,20 +298,24 @@ module riscv_Core
     .stall_Dhl               (stall_Dhl),
     .stall_Xhl               (stall_Xhl),
     .stall_Mhl               (stall_Mhl),
+    .stall_X2hl              (stall_X2hl),
+    .stall_X3hl              (stall_X3hl),
     .stall_Whl               (stall_Whl),
 
     // Control Signals (dpath->ctrl)
 
     .inst_rd_Xhl             (inst_rd_Xhl),
     .inst_rd_Mhl             (inst_rd_Mhl),
+    .inst_rd_X2hl            (inst_rd_X2hl),
+    .inst_rd_X3hl            (inst_rd_X3hl),
     .inst_rd_Whl             (inst_rd_Whl),
 
-    .branch_cond_eq_Xhl	     (branch_cond_eq_Xhl),
-    .branch_cond_ne_Xhl	     (branch_cond_ne_Xhl),
-    .branch_cond_lt_Xhl	     (branch_cond_lt_Xhl),
-    .branch_cond_ltu_Xhl	 (branch_cond_ltu_Xhl),
-    .branch_cond_ge_Xhl	     (branch_cond_ge_Xhl),
-    .branch_cond_geu_Xhl	 (branch_cond_geu_Xhl),
+    .branch_cond_eq_Xhl      (branch_cond_eq_Xhl),
+    .branch_cond_ne_Xhl      (branch_cond_ne_Xhl),
+    .branch_cond_lt_Xhl      (branch_cond_lt_Xhl),
+    .branch_cond_ltu_Xhl     (branch_cond_ltu_Xhl),
+    .branch_cond_ge_Xhl      (branch_cond_ge_Xhl),
+    .branch_cond_geu_Xhl     (branch_cond_geu_Xhl),
     .proc2csr_data_Whl       (proc2csr_data_Whl)
   );
 
