@@ -76,3 +76,136 @@ After these changes `riscvbyp` passes the same asm/bmark tests as `riscvstall` w
 
 After all of this, `riscvlong` passes the full asm test suite. Extending the pipeline adds two stages of latency to every instruction, not just muldiv, as expected - but the processor no longer stalls for the full muldiv latency on unrelated instructions the way the iterative design did.
 
+### Custom Test: `riscv-muldiv-hazard.S`
+
+Added `tests/riscv/riscv-muldiv-hazard.S` (registered in `tests/riscv/riscv.mk` and `build/Makefile`) as the required custom test targeting a specific bug from this lab - the item 6 bug above (`stall_muldiv_hazard_Dhl` going `x` whenever a branch sits in X/M/X2).
+
+The test runs `mul` with four different operand pairs, each immediately followed by `TEST_CHECK_EQ` (whose `bne` directly reads the `mul`'s destination register `x4`) with `0`, `1`, `2`, and `3` `nop`s inserted in between via `TEST_INSERT_NOPS`. Sweeping the gap this way lands the checking branch in D while the `mul` is still sitting in X2, then M, then X, on successive test cases - directly exercising both halves of the fix: `stall_muldiv_hazard_Dhl` correctly stalling `D` while the `mul`'s result isn't at X3 yet, and the bypass network correctly forwarding it from X3 once it is. Unlike the provided `mulh`/`mulhu`/`mulhsu` tests (whose `TEST_CHECK_EQ` branch happens to land past X3 by the time it's reached, since there are always two `li`s in between), this test deliberately controls that spacing so the branch actually overlaps the muldiv-in-flight window - which is what the original bug needed to trigger.
+
+## Performance Evaluation
+
+CPI (`num_cycles / num_inst`) for every asm test, on all three processors (`riscvstall`, `riscvbyp`, `riscvlong`), read from the `STATS` block each `.out` file prints when run with `+stats=1` (`build/*-stall.out`, `*-byp.out`, `*-long.out`).
+
+### CPI by Instruction
+
+**ALU (reg-reg)**
+
+| instr | stall CPI | byp CPI | long CPI |
+|---|---|---|---|
+| `add` | 2.017 | 1.022 | 1.030 |
+| `sub` | 2.004 | 1.022 | 1.031 |
+| `and` | 2.495 | 1.023 | 1.032 |
+| `or` | 2.502 | 1.023 | 1.032 |
+| `xor` | 2.495 | 1.023 | 1.032 |
+| `slt` | 1.969 | 1.022 | 1.031 |
+| `sltu` | 1.969 | 1.022 | 1.031 |
+| `sll` | 2.049 | 1.019 | 1.026 |
+| `srl` | 2.091 | 1.018 | 1.026 |
+| `sra` | 2.132 | 1.018 | 1.025 |
+
+**ALU (immediate)**
+
+| instr | stall CPI | byp CPI | long CPI |
+|---|---|---|---|
+| `addi` | 2.280 | 1.040 | 1.056 |
+| `andi` | 2.512 | 1.060 | 1.083 |
+| `ori` | 2.529 | 1.059 | 1.082 |
+| `xori` | 2.596 | 1.056 | 1.079 |
+| `slti` | 2.208 | 1.040 | 1.056 |
+| `sltiu` | 2.208 | 1.040 | 1.056 |
+| `slli` | 2.277 | 1.038 | 1.054 |
+| `srli` | 2.365 | 1.036 | 1.051 |
+| `srai` | 2.434 | 1.035 | 1.049 |
+
+**Loads**
+
+| instr | stall CPI | byp CPI | long CPI |
+|---|---|---|---|
+| `lb` | 2.365 | 1.027 | 1.035 |
+| `lbu` | 2.365 | 1.027 | 1.035 |
+| `lh` | 2.401 | 1.037 | 1.048 |
+| `lhu` | 2.459 | 1.036 | 1.046 |
+| `lw` | 2.439 | 1.039 | 1.050 |
+
+**Stores**
+
+| instr | stall CPI | byp CPI | long CPI |
+|---|---|---|---|
+| `sb` | 2.391 | 1.010 | 1.014 |
+| `sh` | 2.381 | 1.013 | 1.018 |
+| `sw` | 2.225 | 1.017 | 1.024 |
+
+**Branches**
+
+| instr | stall CPI | byp CPI | long CPI |
+|---|---|---|---|
+| `beq` | 2.336 | 1.445 | 1.461 |
+| `bne` | 2.391 | 1.477 | 1.492 |
+| `blt` | 2.349 | 1.442 | 1.457 |
+| `bltu` | 2.349 | 1.442 | 1.457 |
+| `bge` | 2.380 | 1.473 | 1.488 |
+| `bgeu` | 2.380 | 1.473 | 1.488 |
+
+**Jumps**
+
+| instr | stall CPI | byp CPI | long CPI |
+|---|---|---|---|
+| `jal` | 2.471 | 1.412 | 1.529 |
+| `jalr` | 2.564 | 1.282 | 1.333 |
+
+**Mul/Div**
+
+| instr | stall CPI | byp CPI | long CPI |
+|---|---|---|---|
+| `mul` | 6.348 | 5.476 | 1.149 |
+| `mulh` | 6.077 | 4.901 | 1.077 |
+| `mulhsu` | 6.094 | 4.917 | 1.078 |
+| `mulhu` | 6.094 | 4.917 | 1.073 |
+| `div` | 6.366 | 5.389 | 1.135 |
+| `divu` | 6.286 | 5.359 | 1.145 |
+| `rem` | 6.288 | 5.339 | 1.141 |
+| `remu` | 6.286 | 5.359 | 1.145 |
+
+**Other**
+
+| instr | stall CPI | byp CPI | long CPI |
+|---|---|---|---|
+| `lui` | 1.773 | 1.114 | 1.159 |
+
+**Category averages** (sum of cycles / sum of instructions within each group):
+
+| Group | stall CPI | byp CPI | long CPI |
+|---|---|---|---|
+| ALU reg-reg | 2.165 | 1.021 | 1.029 |
+| ALU immediate | 2.360 | 1.043 | 1.060 |
+| Loads | 2.401 | 1.032 | 1.042 |
+| Stores | 2.347 | 1.013 | 1.018 |
+| Branches | 2.364 | 1.459 | 1.474 |
+| Jumps | 2.536 | 1.321 | 1.393 |
+| Mul/Div | 6.221 | 5.188 | 1.115 |
+| **OVERALL** | **3.427** | **2.266** | **1.097** |
+
+Takeaways:
+- Non-muldiv, non-branch instructions (ALU, load, store) sit right at CPI ~1.0 on both `riscvbyp` and `riscvlong` - bypassing eliminates almost all RAW-hazard stalls, and the two extra pipeline stages in `riscvlong` cost nothing here since nothing in these tests actually depends on a result that's still in X2/X3 by the time it's needed.
+- Branches and jumps cost noticeably more than 1.0 CPI on both `riscvbyp` and `riscvlong` (~1.3-1.5) - both resolve branches in X, so a taken branch always squashes one already-fetched instruction; `riscvlong` is marginally worse than `riscvbyp` here (e.g. `jal` 1.412 -> 1.529) since the deeper pipeline. This is unrelated to muldiv - it's the fixed cost of resolving control flow in X regardless of processor version.
+- `riscvstall` pays roughly 2x CPI across the board (no bypassing at all - every RAW hazard stalls until the producer retires) and ~6x CPI on any muldiv instruction (fully serialized iterative unit).
+- `riscvbyp` fixes the ~2x penalty for everything except muldiv - it still uses the iterative unit, so `mul`/`div`/etc. stay at ~5-5.5 CPI, barely better than `riscvstall`.
+- `riscvlong` is the only version where muldiv CPI drops to ~1.1-1.15 - this is the entire point of Objective 4: overlapping the pipelined muldiv unit's latency with everything else in flight, instead of stalling the whole pipeline for it.
+
+### Microbenchmark Comparison
+
+Same methodology, run on the four `ubmark-*` benchmarks (`build/ubmark-*-stall.out`, `*-byp.out`, `*-long.out`):
+
+| Benchmark | stall CPI | byp CPI | long CPI | byp speedup vs stall | long speedup vs byp |
+|---|---|---|---|---|---|
+| `ubmark-vvadd` | 1.677 | 1.365 | 1.367 | 1.23x | ~1.00x |
+| `ubmark-bin-search` | 2.902 | 1.371 | 1.373 | 2.12x | ~1.00x |
+| `ubmark-masked-filter` | 3.022 | 2.543 | 1.443 | 1.19x | 1.76x |
+| `ubmark-cmplx-mult` | 6.344 | 5.664 | 1.328 | 1.12x | 4.27x |
+
+(Speedup here is CPI ratio, i.e. cycles saved per instruction executed - all three versions execute the same instruction count per benchmark, so this is also the overall runtime speedup.)
+
+- `vvadd` and `bin-search` don't use multiply/divide at all, so `riscvbyp` and `riscvlong` land at essentially the same CPI - bypassing already captured the available win for these benchmarks (ALU/load/store dependencies and branches, respectively), and the extra two pipeline stages in `riscvlong` don't cost anything extra since nothing here is muldiv-bound.
+- `masked-filter` uses some multiply/divide alongside filtering logic - `riscvlong` pulls ahead of `riscvbyp` by 1.76x, less dramatic than `cmplx-mult` since muldiv isn't the dominant cost here.
+- `cmplx-mult` is the extreme case: it's dominated by multiply operations, so it's the one benchmark where `riscvbyp` barely beats `riscvstall` (1.12x - the iterative muldiv unit dominates runtime regardless of bypassing) while `riscvlong` is 4.27x faster than `riscvbyp` and 4.78x faster than `riscvstall` - directly reflecting the per-instruction `mul`/`mulh`/etc. CPI numbers above (~6.1-6.4 -> ~1.1) carried through to a real workload.
+

@@ -83,7 +83,8 @@ tests = \
   riscv-bgeu.vmh \
   riscv-mulh.vmh \
   riscv-mulhu.vmh \
-  riscv-mulhsu.vmh
+  riscv-mulhsu.vmh \
+  riscv-muldiv-hazard.vmh
 
 
 

@@ -49,3 +49,4 @@ riscv_srcs += \
   riscv-mulh.S \
   riscv-mulhu.S \
   riscv-mulhsu.S \
+  riscv-muldiv-hazard.S
