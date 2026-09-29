@@ -5,3 +5,8 @@ Lab1/lab1/build/*-sim
 Lab1/lab1/build/*.out
 Lab1/lab1/tests/build
 Lab1/lab1/ubmark/build
+
+Lab2/lab2/build/*-sim
+Lab2/lab2/build/*.out
+Lab2/lab2/tests/build
+Lab2/lab2/ubmark/build
