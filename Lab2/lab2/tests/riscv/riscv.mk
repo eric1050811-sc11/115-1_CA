@@ -48,8 +48,9 @@ riscv_srcs += \
   riscv-sub.S \
   riscv-sw.S \
   riscv-xor.S \
-  riscv-xori.S 
-#   riscv-test1.S \
+  riscv-xori.S \
+  riscv-test1.S \
+
 #   riscv-test2.S \
 #   riscv-test3.S \
 #   riscv-test4.S \

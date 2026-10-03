@@ -70,7 +70,7 @@ module riscv_CoreScoreboard
       for (i = 0; i < 32; i++) begin
         if (!stall_Dhl && inst_val_Dhl && dst_en && dst == i && dst != 32'd0)
           pending[i] <= 1'b1;
-        else if (reg_latency[i] == 5'b00001)
+        else if (rob_commit_wen && rob_commit_slot == reg_rob_slot[i])
           pending[i] <= 1'b0;
         else
           pending[i] <= pending[i];
@@ -152,36 +152,41 @@ module riscv_CoreScoreboard
     src0_byp_mux_sel = 3'd0;
     stall0 = 1'b0;
     if (src0_en && pending[src0]) begin
-      case (functional_unit[src0])
-        `FUNC_UNIT_ALU:
-          if (reg_latency[src0] == 5'b00010) begin
-            src0_byp_mux_sel = 3'd1; // bypass from X
-          end
-          else if (reg_latency[src0] == 5'b00001) begin
-            src0_byp_mux_sel = 3'd4; // bypass from W
-          end
-          else
-            stall0 = 1'b1;
-        `FUNC_UNIT_MEM:
-          if (reg_latency[src0] == 5'b00010) begin
-            src0_byp_mux_sel = 3'd2; // bypass from M
-          end
-          else if (reg_latency[src0] == 5'b00001) begin
-            src0_byp_mux_sel = 3'd4; // bypass from W
-          end
-          else
-            stall0 = 1'b1;
-        `FUNC_UNIT_MUL:
-          if (reg_latency[src0] == 5'b00010) begin
-            src0_byp_mux_sel = 3'd3; // bypass from X3
-          end
-          else if (reg_latency[src0] == 5'b00001)
-          begin
-            src0_byp_mux_sel = 3'd4; // bypass from W
-          end
-          else
-            stall0 = 1'b1;
-      endcase
+      if (reg_latency[src0] == 5'b00000) begin
+        src0_byp_mux_sel = 3'd5; // bypass from ROB (already written to ROB, waiting for commit)
+      end
+      else begin
+        case (functional_unit[src0])
+          `FUNC_UNIT_ALU:
+            if (reg_latency[src0] == 5'b00010) begin
+              src0_byp_mux_sel = 3'd1; // bypass from X
+            end
+            else if (reg_latency[src0] == 5'b00001) begin
+              src0_byp_mux_sel = 3'd4; // bypass from W
+            end
+            else
+              stall0 = 1'b1;
+          `FUNC_UNIT_MEM:
+            if (reg_latency[src0] == 5'b00010) begin
+              src0_byp_mux_sel = 3'd2; // bypass from M
+            end
+            else if (reg_latency[src0] == 5'b00001) begin
+              src0_byp_mux_sel = 3'd4; // bypass from W
+            end
+            else
+              stall0 = 1'b1;
+          `FUNC_UNIT_MUL:
+            if (reg_latency[src0] == 5'b00010) begin
+              src0_byp_mux_sel = 3'd3; // bypass from X3
+            end
+            else if (reg_latency[src0] == 5'b00001)
+            begin
+              src0_byp_mux_sel = 3'd4; // bypass from W
+            end
+            else
+              stall0 = 1'b1;
+        endcase
+      end
     end
   end
 
@@ -191,36 +196,41 @@ module riscv_CoreScoreboard
     src1_byp_mux_sel = 3'd0;
     stall1 = 1'b0;
     if (src1_en && pending[src1]) begin
-      case (functional_unit[src1])
-        `FUNC_UNIT_ALU:
-          if (reg_latency[src1] == 5'b00010) begin
-            src1_byp_mux_sel = 3'd1; // bypass from X
-          end
-          else if (reg_latency[src1] == 5'b00001) begin
-            src1_byp_mux_sel = 3'd4; // bypass from W
-          end
-          else
-            stall1 = 1'b1;
-        `FUNC_UNIT_MEM:
-          if (reg_latency[src1] == 5'b00010) begin
-            src1_byp_mux_sel = 3'd2; // bypass from M
-          end
-          else if (reg_latency[src1] == 5'b00001) begin
-            src1_byp_mux_sel = 3'd4; // bypass from W
-          end
-          else
-            stall1 = 1'b1;
-        `FUNC_UNIT_MUL:
-          if (reg_latency[src1] == 5'b00010) begin
-            src1_byp_mux_sel = 3'd3; // bypass from X3
-          end
-          else if (reg_latency[src1] == 5'b00001)
-          begin
-            src1_byp_mux_sel = 3'd4; // bypass from W
-          end
-          else
-            stall1 = 1'b1;
-      endcase
+      if (reg_latency[src1] == 5'b00000) begin
+        src1_byp_mux_sel = 3'd5; // bypass from ROB (already written to ROB, waiting for commit)
+      end
+      else begin
+        case (functional_unit[src1])
+          `FUNC_UNIT_ALU:
+            if (reg_latency[src1] == 5'b00010) begin
+              src1_byp_mux_sel = 3'd1; // bypass from X
+            end
+            else if (reg_latency[src1] == 5'b00001) begin
+              src1_byp_mux_sel = 3'd4; // bypass from W
+            end
+            else
+              stall1 = 1'b1;
+          `FUNC_UNIT_MEM:
+            if (reg_latency[src1] == 5'b00010) begin
+              src1_byp_mux_sel = 3'd2; // bypass from M
+            end
+            else if (reg_latency[src1] == 5'b00001) begin
+              src1_byp_mux_sel = 3'd4; // bypass from W
+            end
+            else
+              stall1 = 1'b1;
+          `FUNC_UNIT_MUL:
+            if (reg_latency[src1] == 5'b00010) begin
+              src1_byp_mux_sel = 3'd3; // bypass from X3
+            end
+            else if (reg_latency[src1] == 5'b00001)
+            begin
+              src1_byp_mux_sel = 3'd4; // bypass from W
+            end
+            else
+              stall1 = 1'b1;
+        endcase
+      end
     end
   end
 

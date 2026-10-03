@@ -94,7 +94,7 @@ tests = \
   riscv-sub.vmh \
   riscv-xor.vmh \
   riscv-xori.vmh \
-#   riscv-test1.vmh \
+  riscv-test1.vmh \
 #   riscv-test2.vmh \
 #   riscv-test3.vmh \
 #   riscv-test4.vmh \
