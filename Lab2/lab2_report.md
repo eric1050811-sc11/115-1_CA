@@ -13,7 +13,8 @@ piece works, and the bugs hit along the way (with the mechanism behind each).
 | RF write port switched to commit path (`CoreDpath.v`) | Done | — |
 | Scoreboard: pending cleared on commit | Done | Step 2: 45/47; `jr`, `jalr` timed out (Bug 16) |
 | Scoreboard: ROB bypass (sel 5), both sources | Done | **Step 3: `make check-asm-riscvooo` 47/47, `make check-asm-rand-riscvooo` 47/47** (includes `riscv-test1`, `jr`, `jalr`) |
-| `riscv-test2.S` … `riscv-test5.S` | **Not started** | Files empty; must stay commented out of `riscv.mk` / `build/Makefile` until written |
+| `riscv-test2.S` … `riscv-test5.S` | Done | All wired into `riscv.mk` / `build/Makefile`; **`make check-asm-riscvooo` 51/51, `make check-asm-rand-riscvooo` 51/51** (§5) |
+| Benchmarks (`make run-bmark-riscvooo`, `run-bmark-rand-riscvooo`) | All pass | 4/4 fixed, 4/4 random-delay; compared against Lab 1 riscvlong in §6 |
 
 ## 2. Pipeline facts the design depends on
 
@@ -69,7 +70,7 @@ wire [4:0] MUL_stall_vec = stalls;
 
 | State | Set | Updated / cleared |
 |---|---|---|
-| `pending[r]` | on issue of a writer to `r` | when `rob_commit_wen && rob_commit_slot == reg_rob_slot[r]` (was `reg_latency == 00001` with the dummy ROB — see §3.5) |
+| `pending[r]` | on issue of a writer to `r` | when `rob_commit_wen && rob_commit_slot == reg_rob_slot[r]` (was `reg_latency == 00001` with the dummy ROB — see §3.4) |
 | `reg_latency[r]` | `latency` on issue | shift right each cycle unless the producer's current stage is stalled |
 | `functional_unit[r]` | `func_unit` on issue | holds last writer's unit (stays set after completion — not an "in flight" flag) |
 | `reg_rob_slot[r]` | `rob_alloc_slot` on issue | holds the newest writer's ROB slot |
@@ -105,7 +106,7 @@ Key rule: a tap is a wire in a specific pipe. Being "in stage X" does not mean
 `alu_out_Xhl`. Every pending case either picks a tap that carries that unit's
 result or stalls; none fall back to the RF.
 
-### 3.5 Changes for the real ROB (Section 5)
+### 3.4 Changes for the real ROB (Section 5)
 
 Once the RF is written at **commit** instead of W, a value has three phases:
 
@@ -141,7 +142,7 @@ add  x7, x6, x6   // x6: pending=1, latency=0, not at head → should be sel 5, 
 
 The general `latency == 0` condition covers that case and the commit-cycle case.
 
-### 3.4 Writeback-port arbitration
+### 3.5 Writeback-port arbitration
 
 Three per-unit trackers `wb_alu_latency`, `wb_mem_latency`, `wb_mul_latency`:
 
@@ -225,16 +226,139 @@ TEST_CHECK_EQ( x4, 1 )
 - **The nops matter.** Without them the check's `bne` reads x4 while `mul` is still in flight, gets the `addi` value via bypass, and the test **passes** even on the broken design. The wrong value only becomes visible after the late write lands.
 - Don't use x1 / x29 as test registers — `TEST_CHECK_EQ` clobbers them.
 
-### Remaining
+### `riscv-test2.S` — bypass from the ROB
 
-| Test | Requirement | Idea |
+```asm
+li    x2, 6
+li    x3, 7
+mul   x5, x2, x3   // slow, at ROB head
+addi  x6, x0, 1    // written back early, can't commit past the mul
+nop
+nop
+add   x7, x6, x6   // x6 written back, not committed → sel 5
+TEST_CHECK_EQ( x7, 2 )
+```
+
+- Probe at the `add` in D: `x6: pend=1 lat=00000 slot=3 | sel0=5 sel1=5 | rob head=2`, while the `mul` (slot 2) is still in W. The value is bypassed from `rob_data[3]` with the head blocked by an older entry — the general case, not just the commit cycle.
+- The one-cycle stall the `add` sees just before issuing is a W-port conflict (nop in X vs `mul` in X3), not the scoreboard; sel is already 5 in that cycle.
+- The spec only asks for the scenario. A bypass changes timing, not results, so this test can't fail on a design that stalls until commit instead; the probe trace is the evidence the bypass happens. On the dummy-ROB design the state never exists (RF written at W), so the `add` just reads the RF.
+
+### `riscv-test3.S` — WAW correct on both designs
+
+`mul x4` … *gap* nops … `addi x4, x0, 1` … 4 nops … `TEST_CHECK_EQ( x4, 1 )`, using 4 gap nops.
+
+Measured on the original I2O2 design (commit `12adc39`, dummy ROB, RF written at W) and the final ROB design:
+
+| gap nops | check right after `addi` | check after 4 tail nops |
 |---|---|---|
-| test2 | value bypassed from ROB | value written back but not committed because an older slow instruction blocks the head |
-| test3 | WAW correct on both designs | separate the two writes far enough that the older one lands first (minimum nop count from test1 analysis) |
-| test4 | riscvlong IPC > riscvooo IPC | exercise what riscvooo adds that costs cycles (ROB stalls, WB-port conflicts, commit latency) |
-| test5 | max ROB occupancy | long-latency op at the head while many younger instructions allocate |
+| 0 | original PASS (!) / ROB PASS | original **FAIL** / ROB PASS (= test1) |
+| 1 | original **FAIL** / ROB PASS | original **FAIL** / ROB PASS |
+| 2 | both PASS | both PASS |
+| ≥3 | both PASS | both PASS |
 
-## 6. Bugs encountered
+- **gap = 2** is the boundary. `mul` (leaving X3) and `addi` (leaving X) want the W port in the same cycle; MUL wins arbitration, `addi` stalls a cycle in X, so it still writes second. At gap ≥ 3 the `mul` simply finishes first.
+- **Tail nops are required.** With the check right after the `addi`, gap 0 passes even on the broken design — the check bypasses the `addi` value before the late `mul` write lands (same lesson as test1).
+
+### `riscv-test4.S` — riscvlong IPC > riscvooo IPC
+
+Three groups of `mul` / `nop` / `lw` / `addi`, each with fresh destinations and only shared sources (`x2`, `x3`, load base, `x0`), plus two checks. The load address is a dummy; its value is never used.
+
+| | cycles | IPC |
+|---|---|---|
+| riscvlong (Lab 1) | 31 | **0.774** |
+| riscvooo | 34 | 0.706 |
+
+- In each group the `mul` is in X3, the `lw` in M and the `addi` in X **in the same cycle**, all wanting the single W port. MUL > MEM > ALU: the `lw` waits 1 cycle, the `addi` 2. The stall probe shows exactly 2 W-port stall cycles per group and no RAW stalls.
+- riscvlong sends every instruction through the same `X → M → X2 → X3 → W` path, so writebacks arrive in order and never collide.
+- riscvooo starts ~3 cycles ahead (ALU ops skip M/X2/X3, so the pipeline drains sooner). One group (2 cycles) isn't enough to overcome that; three groups (6 cycles) are.
+- Iterations that didn't work, and why: `ld` (RV64-only) / `sp` as base (sp is x2, overwritten); load base = `mul` result (RAW stall instead of W-port stall, and address 42); two filler nops instead of one (`lw`/`addi` collide one cycle after the `mul`); grouping by type (3 `mul`, 3 `lw`, 3 `addi`) instead of interleaved groups.
+
+### `riscv-test5.S` — maximum ROB occupancy
+
+Six back-to-back independent `mul`s, then `TEST_CHECK_EQ` on the first (`x5`) and last (`x10`) result.
+
+Peak occupancy (probe counting `rob_valid` entries each cycle):
+
+| pattern | peak |
+|---|---|
+| `mul` + 10 independent `addi` | 5 |
+| 4 `mul` then 4 `addi` | 5 |
+| back-to-back independent `mul` (test5) | **6** |
+
+- **Why 6 is the ceiling.** One allocation per cycle, so peak = cycles a head entry stays uncommitted: allocate → X, M, X2, X3, W → commit = 6. After that, one commits and one allocates each cycle.
+- **Why it can't go higher.** Every way to hold the head longer also stalls D (no allocation): memory stall in M ⇒ X stall ⇒ D stall; losing the W port ⇒ `stall_wb_hazard_X` ⇒ D stall; RAW on the head stalls the consumer in D. `div` uses the same fixed 4-stage pipe. X2/X3/W never stall.
+- **Why only `mul`s.** Mixing in ALU ops loses allocation cycles to W-port arbitration (MUL beats ALU), capping at 5.
+- With 16 slots `rob_full` can't assert in these tests (peak 6 < 16), and the stall counters show 0 ROB-full cycles across all four benchmarks (§6). A build with fewer slots would be needed to exercise the full/`rdy` stall.
+
+### Instruction counts (all < 30; counted from the disassembly between `_test` and `_pass`/`_fail`, including `TEST_CHECK_EQ` expansions)
+
+| test | instrs in `_test` | riscvooo cycles / IPC |
+|---|---|---|
+| test1 | 11 | 19 / 0.737 |
+| test2 | 10 | 18 / 0.722 |
+| test3 | 15 | 23 / 0.783 |
+| test4 | 21 | 34 / 0.706 |
+| test5 | 14 | 24 / 0.708 |
+
+## 6. Benchmarks: riscvooo vs. riscvlong
+
+riscvooo numbers from `build/ubmark-*-ooo.out` / `-ooo-rand.out`. riscvlong numbers from the Lab 1 riscvlong simulator run on the same `.vmh` files (same instruction counts).
+
+### Fixed memory latency
+
+| benchmark | insts | riscvlong cycles | riscvlong IPC | riscvooo cycles | riscvooo IPC |
+|---|---|---|---|---|---|
+| bin-search | 1123 | 1542 | **0.728** | 1578 | 0.712 |
+| cmplx-mult | 2946 | 3913 | **0.753** | 4095 | 0.719 |
+| masked-filter | 6961 | 10048 | **0.693** | 11254 | 0.619 |
+| vvadd | 1061 | 1450 | **0.732** | 1525 | 0.696 |
+
+### Random memory delay
+
+| benchmark | riscvlong cycles | riscvlong IPC | riscvooo cycles | riscvooo IPC |
+|---|---|---|---|---|
+| bin-search | 3822 | **0.294** | 3892 | 0.289 |
+| cmplx-mult | 10742 | **0.274** | 11933 | 0.247 |
+| masked-filter | 26818 | **0.260** | 29248 | 0.238 |
+| vvadd | 4202 | **0.252** | 4684 | 0.227 |
+
+**riscvlong wins every benchmark.**
+
+### Where riscvooo's extra cycles come from
+
+Stall-cause counters (probe on riscvooo, fixed latency):
+
+| benchmark | stall_D | RAW (scoreboard) | W-port conflict (`stall_wb_hazard_X`) | `stall_wb_hazard_M` | ROB full |
+|---|---|---|---|---|---|
+| bin-search | 127 | 88 | 39 | 0 | 0 |
+| cmplx-mult | 901 | 716 | 185 | 0 | 0 |
+| masked-filter | 2054 | 845 | 1209 | 0 | 0 |
+| vvadd | 166 | 88 | 78 | 0 | 0 |
+
+Compare the cycle gap with the W-port conflict count:
+
+| benchmark | ooo − long cycles | W-port conflict cycles |
+|---|---|---|
+| bin-search | 36 | 39 |
+| cmplx-mult | 182 | 185 |
+| masked-filter | 1206 | 1209 |
+| vvadd | 75 | 78 |
+
+- The gap is **exactly W-port conflicts − 3** on every benchmark — the same mechanism and the same ~3-cycle drain advantage as test4. (Measured correlation; the "RAW stalls are the same on both" part is inferred from this, not separately counted on riscvlong.)
+- All conflicts are ALU-in-X losing (`stall_wb_hazard_X`); `stall_wb_hazard_M` is 0, i.e. MUL-vs-MEM never collided in these programs.
+- ROB never filled (0 cycles), so ROB size isn't a factor here.
+- masked-filter has by far the most conflicts (1209). Since `stall_wb_hazard_M` is 0, every one is an ALU op in X losing to a load in M or a mul in X3; which pairing dominates wasn't broken down.
+
+### Iron Law view
+
+Time = Instructions × CPI × cycle time.
+- **Instructions**: identical (same binaries).
+- **CPI**: riscvooo higher on all four benchmarks, entirely from writeback-port structural hazards.
+- **Cycle time**: not modeled by the simulator. riscvooo's shorter ALU path and in-D ROB/scoreboard logic would affect it in real hardware, but that can't be measured here.
+
+Interpretation (reasoned, not measured): the out-of-order writeback buys nothing in this design because issue is still in-order and single-wide: finishing an ALU op early only helps if something younger could use it sooner, which the bypass network already handled in riscvlong. Meanwhile the shared W port adds a structural hazard riscvlong doesn't have.
+
+## 7. Bugs encountered
 
 | # | Bug | Symptom / evidence | Mechanism | Fix |
 |---|---|---|---|---|
@@ -255,16 +379,16 @@ TEST_CHECK_EQ( x4, 1 )
 | 14 | ROB used `` `SLOT `` and `for (int i ...)` | `Define or directive not defined`; `Incomprehensible for loop` under `-g2005` | Macro is `` `SLOTS ``; `int` / loop-scoped decl is SystemVerilog | `` `SLOTS ``, `for (i = 0; ...)` with `integer i` |
 | 15 | After switching RF to the commit path: all tests X-out | probe: `rob_alloc_req_val = x` → `rob_valid[head] = x` → `rob_full = x` → `rob_req_rdy = x` at t=125 | Scoreboard cleared `pending` at W, but RF is now written at commit (≥1 cycle later). `bne tp, ra` in `riscv-add` read uninitialized (X) `tp` from RF → branch X → `squash_Dhl` X → `inst_val_Dhl` X → poisoned ROB alloc | Clear `pending` on matching commit (`rob_commit_slot == reg_rob_slot[r]`) |
 | 16 | `jr` / `jalr` time out (symptom fixed; root cause latent) | probe at `jr sp`: t=235 stalled, `op0 = 0x8004c` (stale); t=245 `op0 = 0x80068` (correct) but fetch returns to 0x8004c → infinite loop | Provided fetch logic (`CoreDpath.v:106`) latches `pc_redirect_targ` when `squash_Fhl` during an F stall; `squash_Fhl` uses `brj_taken_Dhl`, not gated by `stall_Dhl`, so a `jr` stalled in D latches a target computed from a stale operand. Latent before the ROB — exposed now because "written back, not committed" values stall | Sel 5 removed this stall → `jr`/`jalr` pass. The framework bug remains for other `jr` stalls (e.g. `lw x5` → `jr x5`); real fix is in provided ctrl/dpath — ask TA whether editing `CoreCtrl.v` is allowed |
-| 17 | ROB bypass only in the commit cycle | review — all tests passed, so not caught by the suite | Values written back but blocked behind an older head entry still stalled until commit; lost IPC and wouldn't demonstrate test2 | Condition `pending && reg_latency == 0`, both sources (§3.5) |
+| 17 | ROB bypass only in the commit cycle | review — all tests passed, so not caught by the suite | Values written back but blocked behind an older head entry still stalled until commit; lost IPC and wouldn't demonstrate test2 | Condition `pending && reg_latency == 0`, both sources (§3.4) |
 
-## 7. Next steps
+## 8. Next steps
 
-1. Write test2 (ROB bypass — use the stuck-behind-the-head shape from §3.5; compare `num_cycles` to confirm the bypass happened), then test3, test4, test5. Add each to `tests/riscv/riscv.mk` and `build/Makefile` (mind the trailing `\` rules).
-2. Consider a test for `lw` → `jr` on the same register to document Bug 16.
-3. Commit after each green run.
-4. Optional (Section 7): benchmark IPC vs. riscvlong; ROB size sweep with test5.
+1. Commit tests 2–5, Makefile wiring, and this report.
+2. Ask the TA about Bug 16 (provided `jr`/`jalr` fetch-redirect latch); optionally add a `lw` → `jr` test documenting it.
+3. Optional (Section 7): ROB size sweep (2–16 slots) with test5 — expectation from §5: IPC flat for ≥ 6 slots, drops below; small sizes also finally exercise `rob_full`.
+4. Package per Section 8.2 (`make clean`, remove `tests/build` and `ubmark/build`, `tar -cvzf <id>-lab2.tar.gz lab2`), then `tar -tzf` to verify the 5 tests and 4 modified `riscvooo/` files are inside.
 
-## 8. Debugging techniques that paid off
+## 9. Debugging techniques that paid off
 
 - `verilator --lint-only -Wall` on a single module: `UNDRIVEN`, `UNUSEDSIGNAL`, `WIDTHTRUNC`, `COMBDLY` caught most structural bugs before simulation.
 - Compiling with the Makefile's exact flags (`iverilog -g2005 ...`) — SystemVerilog-isms only fail there.

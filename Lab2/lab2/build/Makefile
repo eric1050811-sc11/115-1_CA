@@ -95,10 +95,10 @@ tests = \
   riscv-xor.vmh \
   riscv-xori.vmh \
   riscv-test1.vmh \
-#   riscv-test2.vmh \
-#   riscv-test3.vmh \
-#   riscv-test4.vmh \
-#   riscv-test5.vmh \
+  riscv-test2.vmh \
+  riscv-test3.vmh \
+  riscv-test4.vmh \
+  riscv-test5.vmh
 
 riscvooo_rtl_sim = riscvooo-sim
 riscvooo_rtl_rand_sim = riscvooo-randdelay-sim
