@@ -10,3 +10,8 @@ Lab2/lab2/build/*-sim
 Lab2/lab2/build/*.out
 Lab2/lab2/tests/build
 Lab2/lab2/ubmark/build
+
+Lab3/lab3/build/*-sim
+Lab3/lab3/build/*.out
+Lab3/lab3/tests/build
+Lab3/lab3/ubmark/build
