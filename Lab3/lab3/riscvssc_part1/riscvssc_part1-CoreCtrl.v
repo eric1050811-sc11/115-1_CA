@@ -971,6 +971,10 @@ module riscv_CoreCtrl
     .is_muldiv_A       (is_muldiv_A_Dhl),
     .is_load_A         (is_load_A_Dhl),
 
+    .dstB              (rfB_waddr_Dhl),
+    .dstB_en           (rfB_wen_Dhl),
+    .stall_B_Dhl       (stall_B_Dhl),
+
     .stall_X0hl        (stall_X0hl),
     .stall_X1hl        (stall_X1hl)
   );

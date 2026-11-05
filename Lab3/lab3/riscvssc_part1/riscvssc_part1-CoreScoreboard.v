@@ -40,6 +40,10 @@ module riscv_CoreScoreboard
   input            is_muldiv_A      ,
   input            is_load_A        ,
 
+  input      [4:0] dstB             ,
+  input            dstB_en          ,
+  input            stall_B_Dhl      ,
+
   input            stall_X0hl       ,
   input            stall_X1hl
 );
@@ -78,6 +82,11 @@ module riscv_CoreScoreboard
                               :                 `FUNC_UNIT_ALU;
           reg_latency[r] <= 5'b10000;
         end
+        else if (dstB_en && r == dstB && dstB != 5'd0 && !stall_B_Dhl && inst_val_Dhl) begin
+          pending[r] <= 1'b1;
+          functional_unit[r] <= `FUNC_UNIT_BLU;
+          reg_latency[r] <= 5'b10000;
+        end
         else begin
           pending[r] <= (reg_latency[r] == 5'b00001) ? 1'b0 : pending[r];
           reg_latency[r] <= ((reg_latency[r] == 5'b10000 && stall_X0hl) ||
@@ -113,6 +122,14 @@ module riscv_CoreScoreboard
             5'b00010: src00_byp_mux_sel = am_AX3_byp;
             5'b00001: src00_byp_mux_sel = am_AW_byp;
           endcase
+        `FUNC_UNIT_BLU:
+          case (reg_latency[src00])
+            5'b10000: src00_byp_mux_sel = am_BX0_byp;
+            5'b01000: src00_byp_mux_sel = am_BX1_byp;
+            5'b00100: src00_byp_mux_sel = am_BX2_byp;
+            5'b00010: src00_byp_mux_sel = am_BX3_byp;
+            5'b00001: src00_byp_mux_sel = am_BW_byp;
+          endcase
         default:;
       endcase
     end
@@ -141,6 +158,14 @@ module riscv_CoreScoreboard
           case (reg_latency[src01])
             5'b00010: src01_byp_mux_sel = am_AX3_byp;
             5'b00001: src01_byp_mux_sel = am_AW_byp;
+          endcase
+        `FUNC_UNIT_BLU:
+          case (reg_latency[src01])
+            5'b10000: src01_byp_mux_sel = am_BX0_byp;
+            5'b01000: src01_byp_mux_sel = am_BX1_byp;
+            5'b00100: src01_byp_mux_sel = am_BX2_byp;
+            5'b00010: src01_byp_mux_sel = am_BX3_byp;
+            5'b00001: src01_byp_mux_sel = am_BW_byp;
           endcase
         default:;
       endcase
@@ -171,6 +196,14 @@ module riscv_CoreScoreboard
             5'b00010: src10_byp_mux_sel = am_AX3_byp;
             5'b00001: src10_byp_mux_sel = am_AW_byp;
           endcase
+        `FUNC_UNIT_BLU:
+          case (reg_latency[src10])
+            5'b10000: src10_byp_mux_sel = am_BX0_byp;
+            5'b01000: src10_byp_mux_sel = am_BX1_byp;
+            5'b00100: src10_byp_mux_sel = am_BX2_byp;
+            5'b00010: src10_byp_mux_sel = am_BX3_byp;
+            5'b00001: src10_byp_mux_sel = am_BW_byp;
+          endcase
         default:;
       endcase
     end
@@ -199,6 +232,14 @@ module riscv_CoreScoreboard
           case (reg_latency[src11])
             5'b00010: src11_byp_mux_sel = am_AX3_byp;
             5'b00001: src11_byp_mux_sel = am_AW_byp;
+          endcase
+        `FUNC_UNIT_BLU:
+          case (reg_latency[src11])
+            5'b10000: src11_byp_mux_sel = am_BX0_byp;
+            5'b01000: src11_byp_mux_sel = am_BX1_byp;
+            5'b00100: src11_byp_mux_sel = am_BX2_byp;
+            5'b00010: src11_byp_mux_sel = am_BX3_byp;
+            5'b00001: src11_byp_mux_sel = am_BW_byp;
           endcase
         default:;
       endcase
