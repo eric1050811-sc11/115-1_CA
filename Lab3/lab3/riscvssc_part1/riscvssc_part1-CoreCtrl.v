@@ -690,14 +690,18 @@ module riscv_CoreCtrl
   reg [ 4:0] rfA_waddr_Dhl;
   reg        csr_wen_Dhl;
   reg [11:0] csr_addr_Dhl;
+  reg        is_load_A_Dhl;
+  reg        is_muldiv_A_Dhl;
+
+  // D to FUB
+  reg [ 3:0] aluB_fn_Dhl;
+  reg        rfB_wen_Dhl;
+  reg [ 4:0] rfB_waddr_Dhl;
 
   wire [ 3:0] src00_byp_mux_sel;
   wire [ 3:0] src01_byp_mux_sel;
   wire [ 3:0] src10_byp_mux_sel;
   wire [ 3:0] src11_byp_mux_sel;
-
-  reg         is_load_A_Dhl;
-  reg         is_muldiv_A_Dhl;
 
   // TODO: generate your steering signal here!
   always @(*) begin
@@ -714,7 +718,7 @@ module riscv_CoreCtrl
   end
 
   always @(*) begin
-
+    // FUA
     instA_Dhl            = 0;
     pc_mux_sel_Dhl       = 0;
     br_sel_Dhl           = 0;
@@ -740,6 +744,16 @@ module riscv_CoreCtrl
     opA1_byp_mux_sel_Dhl = 0;
     is_load_A_Dhl        = 0;
     is_muldiv_A_Dhl      = 0;
+
+    // FUB
+    instB_Dhl            = 0;
+    aluB_fn_Dhl          = 0;
+    rfB_wen_Dhl          = 0;
+    rfB_waddr_Dhl        = 0;
+    opB0_mux_sel_Dhl     = 0;
+    opB1_mux_sel_Dhl     = 0;
+    opB0_byp_mux_sel_Dhl = 0;
+    opB1_byp_mux_sel_Dhl = 0;
 
     if ( steering_mux_sel_Dhl == 1'b0 ) begin
       // TODO: add your steering logic here!
@@ -769,8 +783,16 @@ module riscv_CoreCtrl
       opA1_byp_mux_sel_Dhl = src01_byp_mux_sel;
       is_load_A_Dhl        = is_load_0_Dhl;
       is_muldiv_A_Dhl      = is_muldiv_0_Dhl;
+
       // D to B
-      // ...
+      instB_Dhl            = ir1_Dhl; 
+      aluB_fn_Dhl          = alu1_fn_Dhl;
+      rfB_wen_Dhl          = rf1_wen_Dhl;
+      rfB_waddr_Dhl        = rf1_waddr_Dhl;
+      opB0_mux_sel_Dhl     = op10_mux_sel_Dhl;
+      opB1_mux_sel_Dhl     = op11_mux_sel_Dhl;
+      opB0_byp_mux_sel_Dhl = src10_byp_mux_sel;
+      opB1_byp_mux_sel_Dhl = src11_byp_mux_sel;
     end
     else if ( steering_mux_sel_Dhl == 1'b1 ) begin
       // TODO: add your steering logic here!
@@ -800,6 +822,16 @@ module riscv_CoreCtrl
       opA1_byp_mux_sel_Dhl = src11_byp_mux_sel;
       is_load_A_Dhl        = is_load_1_Dhl;
       is_muldiv_A_Dhl      = is_muldiv_1_Dhl;
+
+      // D to B
+      instB_Dhl            = ir0_Dhl; 
+      aluB_fn_Dhl          = alu0_fn_Dhl;
+      rfB_wen_Dhl          = rf0_wen_Dhl;
+      rfB_waddr_Dhl        = rf0_waddr_Dhl;
+      opB0_mux_sel_Dhl     = op00_mux_sel_Dhl;
+      opB1_mux_sel_Dhl     = op01_mux_sel_Dhl;
+      opB0_byp_mux_sel_Dhl = src00_byp_mux_sel;
+      opB1_byp_mux_sel_Dhl = src01_byp_mux_sel;
     end
   end
 
@@ -953,19 +985,26 @@ module riscv_CoreCtrl
 
   // Aggregate Stall Signal
 
-  assign stall_Dhl = ( stall_A_Dhl || inst1_left_Dhl ); // TODO
+  assign stall_Dhl = ( stall_A_Dhl || inst1_left_Dhl );
+  wire stall_B_Dhl = 1'b1; // TODO: bubble for now
 
   // Next bubble bit
 
-  wire bubble_sel_Dhl  = ( squash_Dhl || stall_A_Dhl ); // TODO
+  wire bubble_sel_Dhl  = ( squash_Dhl || stall_A_Dhl );
   wire bubble_next_Dhl = ( !bubble_sel_Dhl ) ? bubble_Dhl
                        : ( bubble_sel_Dhl )  ? 1'b1
                        :                       1'bx;
+
+  wire bubbleB_sel_Dhl  = ( squash_Dhl || stall_B_Dhl );
+  wire bubbleB_next_Dhl = ( !bubbleB_sel_Dhl ) ? bubble_Dhl
+                        : ( bubbleB_sel_Dhl )  ? 1'b1
+                        :                        1'bx;
 
   //----------------------------------------------------------------------
   // X0 <- D
   //----------------------------------------------------------------------
 
+  // FUA
   reg [31:0] irA_X0hl;
   reg  [2:0] br_sel_X0hl;
   reg        muldivreq_val_X0hl;
@@ -982,14 +1021,20 @@ module riscv_CoreCtrl
   reg  [4:0] rfA_waddr_X0hl;
   reg        csr_wen_X0hl;
   reg [11:0] csr_addr_X0hl;
-
   reg        bubble_X0hl;
+
+  // FUB
+  reg [31:0] irB_X0hl;
+  reg        rfB_wen_X0hl;
+  reg  [4:0] rfB_waddr_X0hl;
+  reg        bubbleB_X0hl;
 
   // Pipeline Controls
 
   always @ ( posedge clk ) begin
     if ( reset ) begin
       bubble_X0hl <= 1'b1;
+      bubbleB_X0hl <= 1'b1;
     end
     else if( !stall_X0hl ) begin
       irA_X0hl              <= instA_Dhl;
@@ -1009,8 +1054,13 @@ module riscv_CoreCtrl
       rfA_waddr_X0hl        <= rfA_waddr_Dhl;
       csr_wen_X0hl          <= csr_wen_Dhl;
       csr_addr_X0hl         <= csr_addr_Dhl;
-
       bubble_X0hl           <= bubble_next_Dhl;
+
+      irB_X0hl              <= instB_Dhl;
+      aluB_fn_X0hl          <= aluB_fn_Dhl;
+      rfB_wen_X0hl          <= rfB_wen_Dhl;
+      rfB_waddr_X0hl        <= rfB_waddr_Dhl;
+      bubbleB_X0hl          <= bubbleB_next_Dhl;
     end
 
   end
@@ -1072,15 +1122,19 @@ module riscv_CoreCtrl
 
   // Next bubble bit
 
-  wire bubble_sel_X0hl  = ( squash_X0hl || stall_X0hl );
-  wire bubble_next_X0hl = ( !bubble_sel_X0hl ) ? bubble_X0hl
-                       : ( bubble_sel_X0hl )  ? 1'b1
-                       :                       1'bx;
+  wire bubble_sel_X0hl   = ( squash_X0hl || stall_X0hl );
+  wire bubble_next_X0hl  = ( !bubble_sel_X0hl ) ? bubble_X0hl
+                         : ( bubble_sel_X0hl )  ? 1'b1
+                         :                       1'bx;
+  wire bubbleB_next_X0hl = ( !bubble_sel_X0hl ) ? bubbleB_X0hl
+                         : ( bubble_sel_X0hl )  ? 1'b1
+                         :                        1'bx;
 
   //----------------------------------------------------------------------
   // X1 <- X0
   //----------------------------------------------------------------------
 
+  // FUA
   reg [31:0] irA_X1hl;
   reg        is_load_X1hl;
   reg        is_muldiv_X1hl;
@@ -1091,16 +1145,21 @@ module riscv_CoreCtrl
   reg  [4:0] rfA_waddr_X1hl;
   reg        csr_wen_X1hl;
   reg  [4:0] csr_addr_X1hl;
-
   reg        bubble_X1hl;
+
+  // FUB
+  reg [31:0] irB_X1hl;
+  reg        rfB_wen_X1hl;
+  reg  [4:0] rfB_waddr_X1hl;
+  reg        bubbleB_X1hl;
 
   // Pipeline Controls
 
   always @ ( posedge clk ) begin
     if ( reset ) begin
       dmemreq_val_X1hl <= 1'b0;
-
       bubble_X1hl <= 1'b1;
+      bubbleB_X1hl <= 1'b1;
     end
     else if( !stall_X1hl ) begin
       irA_X1hl              <= irA_X0hl;
@@ -1115,8 +1174,12 @@ module riscv_CoreCtrl
       rfA_waddr_X1hl        <= rfA_waddr_X0hl;
       csr_wen_X1hl          <= csr_wen_X0hl;
       csr_addr_X1hl         <= csr_addr_X0hl;
-
       bubble_X1hl           <= bubble_next_X0hl;
+
+      irB_X1hl              <= irB_X0hl;
+      rfB_wen_X1hl          <= rfB_wen_X0hl;
+      rfB_waddr_X1hl        <= rfB_waddr_X0hl;
+      bubbleB_X1hl          <= bubbleB_next_X0hl;
     end
   end
 
@@ -1146,15 +1209,19 @@ module riscv_CoreCtrl
 
   // Next bubble bit
 
-  wire bubble_sel_X1hl  = ( squash_X1hl || stall_X1hl );
-  wire bubble_next_X1hl = ( !bubble_sel_X1hl ) ? bubble_X1hl
-                       : ( bubble_sel_X1hl )  ? 1'b1
-                       :                       1'bx;
+  wire bubble_sel_X1hl   = ( squash_X1hl || stall_X1hl );
+  wire bubble_next_X1hl  = ( !bubble_sel_X1hl ) ? bubble_X1hl
+                         : ( bubble_sel_X1hl )  ? 1'b1
+                         :                       1'bx;
+  wire bubbleB_next_X1hl = ( !bubble_sel_X1hl ) ? bubbleB_X1hl
+                         : ( bubble_sel_X1hl )  ? 1'b1
+                         :                        1'bx;
 
   //----------------------------------------------------------------------
   // X2 <- X1
   //----------------------------------------------------------------------
 
+  // FUA
   reg [31:0] irA_X2hl;
   reg        is_muldiv_X2hl;
   reg        rfA_wen_X2hl;
@@ -1163,14 +1230,20 @@ module riscv_CoreCtrl
   reg  [4:0] csr_addr_X2hl;
   reg        execute_mux_sel_X2hl;
   reg        muldiv_mux_sel_X2hl;
-
   reg        bubble_X2hl;
+
+  // FUB
+  reg [31:0] irB_X2hl;
+  reg        rfB_wen_X2hl;
+  reg  [4:0] rfB_waddr_X2hl;
+  reg        bubbleB_X2hl;
 
   // Pipeline Controls
 
   always @ ( posedge clk ) begin
     if ( reset ) begin
       bubble_X2hl <= 1'b1;
+      bubbleB_X2hl <= 1'b1;
     end
     else if( !stall_X2hl ) begin
       irA_X2hl              <= irA_X1hl;
@@ -1181,8 +1254,12 @@ module riscv_CoreCtrl
       csr_wen_X2hl          <= csr_wen_X1hl;
       csr_addr_X2hl         <= csr_addr_X1hl;
       execute_mux_sel_X2hl  <= execute_mux_sel_X1hl;
-
       bubble_X2hl           <= bubble_next_X1hl;
+
+      irB_X2hl              <= irB_X1hl;
+      rfB_wen_X2hl          <= rfB_wen_X1hl;
+      rfB_waddr_X2hl        <= rfB_waddr_X1hl;
+      bubbleB_X2hl          <= bubbleB_next_X1hl;
     end
   end
 
@@ -1204,29 +1281,39 @@ module riscv_CoreCtrl
 
   // Next bubble bit
 
-  wire bubble_sel_X2hl  = ( squash_X2hl || stall_X2hl );
-  wire bubble_next_X2hl = ( !bubble_sel_X2hl ) ? bubble_X2hl
-                       : ( bubble_sel_X2hl )  ? 1'b1
-                       :                       1'bx;
+  wire bubble_sel_X2hl   = ( squash_X2hl || stall_X2hl );
+  wire bubble_next_X2hl  = ( !bubble_sel_X2hl ) ? bubble_X2hl
+                         : ( bubble_sel_X2hl )  ? 1'b1
+                         :                       1'bx;
+  wire bubbleB_next_X2hl = ( !bubble_sel_X2hl ) ? bubbleB_X2hl
+                         : ( bubble_sel_X2hl )  ? 1'b1
+                         :                        1'bx;
 
   //----------------------------------------------------------------------
   // X3 <- X2
   //----------------------------------------------------------------------
 
+  // FUA
   reg [31:0] irA_X3hl;
   reg        is_muldiv_X3hl;
   reg        rfA_wen_X3hl;
   reg  [4:0] rfA_waddr_X3hl;
   reg        csr_wen_X3hl;
   reg  [4:0] csr_addr_X3hl;
-
   reg        bubble_X3hl;
+
+  // FUB
+  reg [31:0] irB_X3hl;
+  reg        rfB_wen_X3hl;
+  reg  [4:0] rfB_waddr_X3hl;
+  reg        bubbleB_X3hl;
 
   // Pipeline Controls
 
   always @ ( posedge clk ) begin
     if ( reset ) begin
       bubble_X3hl <= 1'b1;
+      bubbleB_X3hl <= 1'b1;
     end
     else if( !stall_X3hl ) begin
       irA_X3hl              <= irA_X2hl;
@@ -1237,8 +1324,12 @@ module riscv_CoreCtrl
       csr_wen_X3hl          <= csr_wen_X2hl;
       csr_addr_X3hl         <= csr_addr_X2hl;
       execute_mux_sel_X3hl  <= execute_mux_sel_X2hl;
-
       bubble_X3hl           <= bubble_next_X2hl;
+
+      irB_X3hl              <= irB_X2hl;
+      rfB_wen_X3hl          <= rfB_wen_X2hl;
+      rfB_waddr_X3hl        <= rfB_waddr_X2hl;
+      bubbleB_X3hl          <= bubbleB_next_X2hl;
     end
   end
 
@@ -1260,27 +1351,36 @@ module riscv_CoreCtrl
 
   // Next bubble bit
 
-  wire bubble_sel_X3hl  = ( squash_X3hl || stall_X3hl );
-  wire bubble_next_X3hl = ( !bubble_sel_X3hl ) ? bubble_X3hl
-                       : ( bubble_sel_X3hl )  ? 1'b1
-                       :                       1'bx;
+  wire bubble_sel_X3hl   = ( squash_X3hl || stall_X3hl );
+  wire bubble_next_X3hl  = ( !bubble_sel_X3hl ) ? bubble_X3hl
+                         : ( bubble_sel_X3hl )  ? 1'b1
+                         :                       1'bx;
+  wire bubbleB_next_X3hl = ( !bubble_sel_X3hl ) ? bubbleB_X3hl
+                         : ( bubble_sel_X3hl )  ? 1'b1
+                         :                        1'bx;
 
   //----------------------------------------------------------------------
   // W <- X3
   //----------------------------------------------------------------------
 
+  // FUA
   reg [31:0] irA_Whl;
   reg        rfA_wen_Whl;
   reg        csr_wen_Whl;
   reg  [4:0] csr_addr_Whl;
-
   reg        bubble_Whl;
+
+  // FUB
+  reg [31:0] irB_Whl;
+  reg        rfB_wen_Whl;
+  reg        bubbleB_Whl;
 
   // Pipeline Controls
 
   always @ ( posedge clk ) begin
     if ( reset ) begin
       bubble_Whl <= 1'b1;
+      bubbleB_Whl <= 1'b1;
     end
     else if( !stall_Whl ) begin
       irA_Whl          <= irA_X3hl;
@@ -1288,8 +1388,12 @@ module riscv_CoreCtrl
       rfA_waddr_Whl    <= rfA_waddr_X3hl;
       csr_wen_Whl      <= csr_wen_X3hl;
       csr_addr_Whl     <= csr_addr_X3hl;
-
       bubble_Whl       <= bubble_next_X3hl;
+
+      irB_Whl          <= irB_X3hl;
+      rfB_wen_Whl      <= rfB_wen_X3hl;
+      rfB_waddr_Whl    <= rfB_waddr_X3hl;
+      bubbleB_Whl      <= bubbleB_next_X3hl;
     end
   end
 
@@ -1300,10 +1404,12 @@ module riscv_CoreCtrl
   // Is current stage valid?
 
   wire inst_val_Whl = ( !bubble_Whl && !squash_Whl );
+  wire instB_val_Whl = ( !bubbleB_Whl && !squash_Whl );
 
   // Only set register file wen if stage is valid
 
   assign rfA_wen_out_Whl = ( inst_val_Whl && !stall_Whl && rfA_wen_Whl );
+  assign rfB_wen_out_Whl = ( instB_val_Whl && !stall_Whl && rfB_wen_Whl );
 
   // Dummy squash and stall signals
 
@@ -1320,8 +1426,8 @@ module riscv_CoreCtrl
 
   always @ ( posedge clk ) begin
     irA_debug       <= irA_Whl;
-    inst_val_debug <= inst_val_Whl;
-    irB_debug       <= 32'b0; // FIXME: fix this when you can have two instructions issued per cycle!
+    inst_val_debug  <= inst_val_Whl;
+    irB_debug       <= irB_Whl;
   end
 
   //----------------------------------------------------------------------
