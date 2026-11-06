@@ -647,30 +647,10 @@ module riscv_CoreCtrl
 
   // Steering Logic
 
-  reg inst0_issued_Dhl;
+  reg  inst0_issued_Dhl;
 
   wire stall_0_hazard_Dhl;
   wire stall_1_hazard_Dhl;
-
-  // hazard of whichever instruction is steered to A, gated by valid
-  wire hazard_A_Dhl   = inst_val_Dhl && ( inst0_issued_Dhl ? stall_1_hazard_Dhl
-                                                          : stall_0_hazard_Dhl );
-  wire stall_A_Dhl    = stall_X0hl || hazard_A_Dhl;           // A does not issue
-  wire issue_A_Dhl    = inst_val_Dhl && !stall_A_Dhl;         // A does issue
-
-  // inst1 still has to go: valid pair, inst0's turn, and inst0 is not a jump
-  wire inst1_left_Dhl = inst_val_Dhl && !inst0_issued_Dhl && !brj_taken_0_Dhl;
-
-  always @( posedge clk ) begin
-    if ( reset || squash_Dhl )
-      inst0_issued_Dhl <= 1'b0;
-    else if ( !stall_Dhl )
-      inst0_issued_Dhl <= 1'b0;
-    else if ( issue_A_Dhl )
-      inst0_issued_Dhl <= 1'b1;
-  end
-
-
 
   // D to FUA
   reg [ 1:0] pc_mux_sel_Dhl;
@@ -703,18 +683,81 @@ module riscv_CoreCtrl
   wire [ 3:0] src10_byp_mux_sel;
   wire [ 3:0] src11_byp_mux_sel;
 
-  // TODO: generate your steering signal here!
+/*
+
+First turn for this pair (inst0_issued_Dhl = 0)
+
+ #    Situation                   sel      A gets                                 B gets                  D        Bit next
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 1    ALU + ALU                   0        inst0                                  inst1                   advance  0
+ 2    ALU + non-ALU               1        inst1                                  inst0                   advance  0
+ 3    lw/mul + ALU                0        inst0                                  inst1                   advance  0
+ 4    Non-ALU + non-ALU           0        inst0                                  bubble                  hold     1
+ 5    inst1 has RAW/WAW on inst0  by type  inst0 alone, in the pipe sel gives it                          hold     1
+ 6    inst0 is a branch           0        inst0                                  bubble                  hold     1
+ 7    inst0 is jal/jalr           0        inst0                                  bubble (inst1 dropped)  advance  0
+ 8    inst0 has a hazard          by type  bubble                                 bubble                  hold     0
+ 9    Only inst1 has a hazard     by type  inst0 alone, in the pipe sel gives it                          hold     1
+
+Second turn (inst0_issued_Dhl = 1), so sel is always 1
+
+ #    Situation           A gets  B gets  D        Bit next
+────────────────────────────────────────────────────────────
+10    inst1 is ready      inst1   bubble  advance  0
+11    inst1 has a hazard  bubble  bubble  hold     1
+
+*/
+
+  // ALU / non-ALU
+  wire is_nonalu_0 = (is_load_0_Dhl || dmemreq_msg_rw_0_Dhl || brj_taken_0_Dhl ||
+                      (br_sel_0_Dhl != br_none) || is_muldiv_0_Dhl || csr_wen_0_Dhl);
+  wire is_nonalu_1 = (is_load_1_Dhl || dmemreq_msg_rw_1_Dhl || brj_taken_1_Dhl ||
+                      (br_sel_1_Dhl != br_none) || is_muldiv_1_Dhl || csr_wen_1_Dhl);
+  wire is_alu_0    = !is_nonalu_0;
+  wire is_alu_1    = !is_nonalu_1;
+
+  // inst0 jump / branch
+  wire is_jump_0_Dhl = cs0[`RISCV_INST_MSG_J_EN];
+  wire is_branch_0_Dhl = (br_sel_0_Dhl != br_none);
+
+  // Hazard between inst0 and inst1
+  wire raw_1_on_0_Dhl = rf0_wen_Dhl && (rf0_waddr_Dhl != 5'd0) && (
+                        (rs11_en_Dhl && (rs11_addr_Dhl == rf0_waddr_Dhl)) ||
+                        (rs21_en_Dhl && (rs21_addr_Dhl == rf0_waddr_Dhl)));
+  wire waw_1_on_0_Dhl = rf0_wen_Dhl && rf1_wen_Dhl && (rf0_waddr_Dhl != 5'd0) && 
+                        (rf0_waddr_Dhl == rf1_waddr_Dhl);
+
+  // inst1 blocked by inst0, # 4-7
+  wire split_Dhl = (is_nonalu_0 && is_nonalu_1) || (raw_1_on_0_Dhl || waw_1_on_0_Dhl) ||
+                    is_jump_0_Dhl || is_branch_0_Dhl;
+
+  // inst can not issue this cycle
+  // # 8
+  wire stall_0_Dhl = !inst0_issued_Dhl && (stall_X0hl || (inst_val_Dhl && stall_0_hazard_Dhl));
+  // # 9
+  wire stall_1_Dhl = stall_X0hl || (inst_val_Dhl && (stall_1_hazard_Dhl
+                       || (!inst0_issued_Dhl && (stall_0_Dhl || split_Dhl))));
+
+  // FU
+  wire stall_A_Dhl = steering_mux_sel_Dhl ? stall_1_Dhl : stall_0_Dhl;
+  wire stall_B_Dhl = inst0_issued_Dhl     ? 1'b1                       // B holds inst0 again
+                   : steering_mux_sel_Dhl ? stall_0_Dhl : stall_1_Dhl;
+
+  wire issue_A_Dhl = inst_val_Dhl && !stall_A_Dhl;                      // jump redirect
+  wire issue_0_Dhl = inst_val_Dhl && !inst0_issued_Dhl && !stall_0_Dhl; // inst0 leaves D
+
+  always @( posedge clk ) begin
+    if (reset || squash_Dhl)
+      inst0_issued_Dhl <= 1'b0;
+    else if ( !stall_Dhl )
+      inst0_issued_Dhl <= 1'b0;
+    else if ( issue_0_Dhl )
+      inst0_issued_Dhl <= 1'b1;
+  end
+
   always @(*) begin
-    // ALU/ALU: no swap
-    // ALU/NonALU: swap
-    // steering_mux_sel_Dhl = 1'b1;
-    // NonALU/ALU: no swap
-    // steering_mux_sel_Dhl = 1'b0;
-    // Both NonALU: no swap stall 1, then swap
-    // steering_mux_sel_Dhl = 1'b0;
-    // stall inst1
-    // steering_mux_sel_Dhl = 1'b1;
-    steering_mux_sel_Dhl = inst0_issued_Dhl;
+    steering_mux_sel_Dhl = (is_alu_0 && is_nonalu_1) || // # 1-3
+                           inst0_issued_Dhl;            // # 10-11
   end
 
   always @(*) begin
@@ -756,7 +799,6 @@ module riscv_CoreCtrl
     opB1_byp_mux_sel_Dhl = 0;
 
     if ( steering_mux_sel_Dhl == 1'b0 ) begin
-      // TODO: add your steering logic here!
       // D to FUA
       instA_Dhl            = ir0_Dhl;
       pc_mux_sel_Dhl       = pc_mux_sel_0_Dhl;
@@ -785,7 +827,7 @@ module riscv_CoreCtrl
       is_muldiv_A_Dhl      = is_muldiv_0_Dhl;
 
       // D to B
-      instB_Dhl            = ir1_Dhl; 
+      instB_Dhl            = ir1_Dhl;
       aluB_fn_Dhl          = alu1_fn_Dhl;
       rfB_wen_Dhl          = rf1_wen_Dhl;
       rfB_waddr_Dhl        = rf1_waddr_Dhl;
@@ -795,7 +837,6 @@ module riscv_CoreCtrl
       opB1_byp_mux_sel_Dhl = src11_byp_mux_sel;
     end
     else if ( steering_mux_sel_Dhl == 1'b1 ) begin
-      // TODO: add your steering logic here!
       // D to FUA
       instA_Dhl            = ir1_Dhl;
       pc_mux_sel_Dhl       = pc_mux_sel_1_Dhl;
@@ -824,7 +865,7 @@ module riscv_CoreCtrl
       is_muldiv_A_Dhl      = is_muldiv_1_Dhl;
 
       // D to B
-      instB_Dhl            = ir0_Dhl; 
+      instB_Dhl            = ir0_Dhl;
       aluB_fn_Dhl          = alu0_fn_Dhl;
       rfB_wen_Dhl          = rf0_wen_Dhl;
       rfB_waddr_Dhl        = rf0_waddr_Dhl;
@@ -989,8 +1030,11 @@ module riscv_CoreCtrl
 
   // Aggregate Stall Signal
 
-  assign stall_Dhl = ( stall_A_Dhl || inst1_left_Dhl );
-  wire stall_B_Dhl = 1'b1; // TODO: bubble for now
+  // D holds the pair until all of it has left (a jump in inst0 drops inst1)
+  assign stall_Dhl = stall_X0hl || (inst_val_Dhl &&
+                                    (inst0_issued_Dhl ? stall_1_Dhl
+                                                      : (stall_0_Dhl || (!is_jump_0_Dhl && stall_1_Dhl)))
+                                   );
 
   // Next bubble bit
 
@@ -1538,7 +1582,7 @@ module riscv_CoreCtrl
   reg overload = 1'b0;
 
   always @ ( posedge clk ) begin
-    if (( !cs0[`RISCV_INST_MSG_INST_VAL] && !reset ) 
+    if (( !cs0[`RISCV_INST_MSG_INST_VAL] && !reset )
      || ( !cs1[`RISCV_INST_MSG_INST_VAL] && !reset )) begin
       $display(" RTL-ERROR : %m : Illegal instruction!");
 
