@@ -142,7 +142,9 @@ To see what empties decode, I also counted control-flow instructions (branches r
 4. Memory stalls are 0, as expected with fixed memory latency
 5. WAW pairs are negligible (2 cycles in every benchmark), so letting WAW pairs dual-issue is not worth optimizing
 
-### Branch prediction
+### Branch prediction in decode
+
+This was the first step. The final design replaces it with prediction in fetch (next sections); the decode-stage counter table described here is no longer in the level 2 code.
 
 The profile shows that D empty is the largest category in vvadd, bin-search and masked-filter, and that almost all of it is the 2.5–3.1 cycle refill after each taken branch, which only redirects once it resolves in X0. So the first optimization is branch prediction.
 
@@ -190,4 +192,63 @@ D-empty cycles drop by 45% in vvadd and 48% in masked-filter, and meets the Leve
 | bin-search    | 1578   | 1460              | −7.5%  | 1500          | 1300          |
 | cmplx-mult    | 3826   | 3759              | −1.8%  | 4000          | 3500          |
 | masked-filter | 8809   | 7368              | −16.4% | 8500          | 7500          |
+
+### Branch prediction in fetch
+
+When decode predicts, the pair after the branch is already being fetched, so every predicted-taken branch still costs a bubble. Predicting while the branch itself is in fetch removes that bubble.
+
+The datapath gets a branch target buffer (BTB) with 32 entries, indexed by bits 6–2 of the PC, each holding a valid bit, a tag (PC bits 31–7), a target and a 2-bit counter. Fetch looks up both slots of the pair (`pc_Fhl` and `pc_Fhl+4`). If a slot hits and its counter predicts taken, the next fetch goes to the stored target instead of PC+8. Slot 0 wins, since slot 1 is then on the wrong path. This is not a squash: the pair in fetch is still correct, only the next fetch address changes. The guess is only used for a real pair, not a bubble, a squashed pair or an abandoned fetch.
+
+The per-slot guess and the target used travel into decode with the pair, where control checks them against the decoded instruction:
+
+- A branch is predicted taken only if fetch guessed it and the stored target equals `branch_targ_Dhl`; otherwise it is predicted not taken. This prediction travels to X0 as before.
+- A `jal` that fetch already redirected to the right target (`jump_targ_Dhl`) does not redirect again; other jumps redirect from decode as before.
+- If fetch guessed a slot taken but decode finds no taken branch or jump there, decode redirects to the pair's pc+8 and squashes fetch. If the guess was for slot 0, inst1 was fetched correctly and is kept.
+
+X0 resolves branches as before and also updates the BTB, once per branch and not while X0 is stalled: a taken branch fills a missing entry (counter weakly taken) or counts its entry up, and a not-taken branch counts its entry down. A `jal` leaving decode fills an entry as strongly taken; `jalr` is not stored, because its target comes from a register. If an X0 update and a decode fill happen in the same cycle, the X0 update wins.
+
+### Decode, fetch + decode, and fetch-only prediction
+
+I first kept the decode-stage counter table as a second stage behind the BTB, then tried the BTB alone. All three versions pass every assembly test and ubmark under normal and randomized-delay simulation.
+
+| ubmark        | Decode only | Fetch + decode | Fetch only | Mispredicted (fetch + decode / fetch only) |
+| :------------ | ----------: | -------------: | ---------: | ---------------: |
+| vvadd         | 1228        | 1076           | **1073**   | 20 / 19          |
+| bin-search    | 1460        | 1253           | **1254**   | 62 / 63          |
+| cmplx-mult    | 3759        | 3629           | **3587**   | 28 / 14          |
+| masked-filter | 7368        | 6198           | **6199**   | 88 / 90          |
+
+With fetch + decode, decode corrected the BTB's guess only 1 / 0 / 11 / 1 times, while the BTB guess was used 132 / 186 / 95 / 1122 times. The decode table adds almost nothing, and in cmplx-mult it is worse than the BTB: it has no tags, so different branches sharing an entry disturb each other (28 mispredictions instead of 14). The BTB only predicts taken for a branch it has seen taken at that exact address.
+
+So the final design keeps prediction in fetch only, and the decode counter table, its update and its index ports were removed. The trade-off: a branch that is not in the BTB (first run, or evicted by another branch with the same index) pays the full X0 redirect, where fetch + decode would still predict it in decode with one bubble. That matters only if a program has more active branches than the 32-entry BTB holds; a larger BTB would cover that without new ALUs.
+
+Profile with fetch-only prediction:
+
+| Category                  | vvadd     | bin-search | cmplx-mult | masked-filter |
+| :------------------------ | --------: | --------: | ---------: | ---------: |
+| D empty                   |  86 ( 8%) | 175 (14%) |  192 ( 5%) |  423 ( 7%) |
+| Mem stall                 |   0 ( 0%) |   0 ( 0%) |    0 ( 0%) |    0 ( 0%) |
+| Second turn, inst1 issues | 321 (30%) | 366 (29%) | 1194 (33%) | 1153 (19%) |
+| inst0 hazard              |  85 ( 8%) |  58 ( 5%) |  113 ( 3%) |  620 (10%) |
+| inst1 hazard              |   0 ( 0%) |   6 ( 0%) |    0 ( 0%) |   28 ( 0%) |
+| Jump                      |   3 ( 0%) |   4 ( 0%) |    4 ( 0%) |    3 ( 0%) |
+| Branch hold               |  90 ( 8%) | 191 (15%) |  119 ( 3%) |  752 (12%) |
+| Both non-ALU              | 284 (26%) |  45 ( 4%) |  829 (23%) |  745 (12%) |
+| RAW                       |  31 ( 3%) | 239 (19%) |  258 ( 7%) |  320 ( 5%) |
+| WAW                       |   2 ( 0%) |   2 ( 0%) |    2 ( 0%) |    2 ( 0%) |
+| Second turn, inst1 hazard |   3 ( 0%) |  30 ( 2%) |  603 (17%) |  171 ( 3%) |
+| Dual issue                | 168 (16%) | 138 (11%) |  273 ( 8%) | 1982 (32%) |
+| Total (= `num_cycles`)    | **1073**  |  **1254** |  **3587**  |  **6199**  |
+| Mispredicted branches     | 19 / 158 (12%) | 63 / 262 (24%) | 14 / 300 (5%) | 90 / 1224 (7%) |
+
+D-empty cycles fall by 80% in vvadd and 86% in masked-filter compared with Part 1.
+
+| ubmark        | Part 1 | Fetch prediction | Change vs Part 1 | Level 1 limit | Level 2 limit |
+| :------------ | -----: | ---------------: | ---------------: | ------------: | ------------: |
+| vvadd         | 1424   | 1073             | −24.6%           | 1400          | 1200          |
+| bin-search    | 1578   | 1254             | −20.5%           | 1500          | 1300          |
+| cmplx-mult    | 3826   | 3587             | −6.2%            | 4000          | 3500 (87 over) |
+| masked-filter | 8809   | 6199             | −29.6%           | 8500          | 7500          |
+
+Level 1 is met on all four benchmarks and Level 2 on three. cmplx-mult is still 87 cycles over: its remaining cycles are not branch-related (only 192 D-empty and 119 branch-hold cycles are left), but single issue, mostly a second turn for inst1 (33%), pairs that both need FUA (23%) and inst1 waiting on mul/div results (17%).
 

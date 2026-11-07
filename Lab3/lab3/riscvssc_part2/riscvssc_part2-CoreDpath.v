@@ -72,9 +72,13 @@ module riscv_CoreDpath
   output        branch_cond_ltu_X0hl,
   output        branch_cond_ge_X0hl,
   output        branch_cond_geu_X0hl,
-  // Branch predictor table index: pcA_Dhl (lookup in D), pcA_X0hl (update in X0)
-  output [ 4:0] bp_idx_Dhl,  // predictor index: pcA_Dhl[6:2]
-  output [ 4:0] bp_idx_X0hl, // predictor index: pcA_X0hl[6:2]
+  output        btb_taken0_Fhl,
+  output        btb_taken1_Fhl,
+  output        btb_match_br_Dhl,
+  output        btb_match_j_Dhl,
+  input         btb_br_upd_X0hl,
+  input         btb_br_taken_X0hl,
+  input         btb_jal_fill_Dhl,
   output [31:0] proc2csr_data_Whl
 );
 
@@ -110,10 +114,10 @@ module riscv_CoreDpath
     : ( pc_mux_sel_Phl == 3'd1 ) ? branch_targ_Phl
     : ( pc_mux_sel_Phl == 3'd2 ) ? jump_targ_Phl
     : ( pc_mux_sel_Phl == 3'd3 ) ? jumpreg_targ_Phl
-    : ( pc_mux_sel_Phl == 3'd4 ) ? branch_targ_Dhl
     : ( pc_mux_sel_Phl == 3'd5 ) ? pcA_plus4_X0hl
+    : ( pc_mux_sel_Phl == 3'd6 ) ? btb_targ_Fhl
+    : ( pc_mux_sel_Phl == 3'd7 ) ? pc_plus8_Dhl
     :                              32'bx;
-
 
   reg        pc_redirect_pending;
   reg [31:0] pc_redirect_targ;
@@ -173,6 +177,20 @@ module riscv_CoreDpath
   assign pc_plus4_Fhl = pc_Fhl + 32'd4;
   assign pc_plus8_Fhl = pc_Fhl + 32'd8;
 
+  // BTB: 32 entries, index pc[6:2], tag pc[31:7], target, 2-bit counter
+  reg        btb_val  [0:31];
+  reg [24:0] btb_tag  [0:31];
+  reg [31:0] btb_targ [0:31];
+  reg [ 1:0] btb_ctr  [0:31];
+
+  wire [4:0] btb_idx0 = pc_Fhl[6:2];
+  wire [4:0] btb_idx1 = pc_plus4_Fhl[6:2];
+  wire btb_hit0 = btb_val[btb_idx0] && ( btb_tag[btb_idx0] == pc_Fhl[31:7] );
+  wire btb_hit1 = btb_val[btb_idx1] && ( btb_tag[btb_idx1] == pc_plus4_Fhl[31:7] );
+  assign btb_taken0_Fhl = btb_hit0 && btb_ctr[btb_idx0][1];
+  assign btb_taken1_Fhl = btb_hit1 && btb_ctr[btb_idx1][1];
+  wire [31:0] btb_targ_Fhl = btb_taken0_Fhl ? btb_targ[btb_idx0] : btb_targ[btb_idx1];
+
   //----------------------------------------------------------------------
   // D <- F
   //----------------------------------------------------------------------
@@ -180,12 +198,14 @@ module riscv_CoreDpath
   reg [31:0] pc_Dhl;
   reg [31:0] pc_plus4_Dhl;
   reg [31:0] pc_plus8_Dhl;
+  reg [31:0] btb_targ_Dhl;
 
   always @ (posedge clk) begin
     if( !stall_Dhl ) begin
       pc_Dhl       <= pc_Fhl;
       pc_plus4_Dhl <= pc_plus4_Fhl;
       pc_plus8_Dhl <= pc_plus8_Fhl;
+      btb_targ_Dhl <= btb_targ_Fhl;
     end
   end
 
@@ -447,6 +467,41 @@ module riscv_CoreDpath
     end
   end
 
+  // BTB write: X0 branch update/fill has priority over a D jal fill
+  wire [4:0] btbx_idx = pcA_X0hl[6:2];
+  wire       btbx_hit = btb_val[btbx_idx] && ( btb_tag[btbx_idx] == pcA_X0hl[31:7] );
+  wire [4:0] btbd_idx = pcA_Dhl[6:2];
+
+  integer btb_i;
+  always @ (posedge clk) begin
+    if ( reset ) begin
+      for ( btb_i = 0; btb_i < 32; btb_i = btb_i + 1 )
+        btb_val[btb_i] <= 1'b0;
+    end
+    else if ( btb_br_upd_X0hl ) begin
+      if ( btb_br_taken_X0hl ) begin
+        if ( btbx_hit ) begin
+          if ( btb_ctr[btbx_idx] != 2'b11 ) btb_ctr[btbx_idx] <= btb_ctr[btbx_idx] + 2'b01;
+          btb_targ[btbx_idx] <= branch_targ_X0hl;
+        end
+        else begin
+          btb_val [btbx_idx] <= 1'b1;
+          btb_tag [btbx_idx] <= pcA_X0hl[31:7];
+          btb_targ[btbx_idx] <= branch_targ_X0hl;
+          btb_ctr [btbx_idx] <= 2'b10;
+        end
+      end
+      else if ( btbx_hit && ( btb_ctr[btbx_idx] != 2'b00 ) )
+        btb_ctr[btbx_idx] <= btb_ctr[btbx_idx] - 2'b01;
+    end
+    else if ( btb_jal_fill_Dhl ) begin
+      btb_val [btbd_idx] <= 1'b1;
+      btb_tag [btbd_idx] <= pcA_Dhl[31:7];
+      btb_targ[btbd_idx] <= jump_targ_Dhl;
+      btb_ctr [btbd_idx] <= 2'b11;
+    end
+  end
+
   //----------------------------------------------------------------------
   // Execute Stage
   //----------------------------------------------------------------------
@@ -677,9 +732,9 @@ module riscv_CoreDpath
     pcB_debug <= pcB_Whl;
   end
 
-  // Branch predictor index (to ctrl)
-  assign bp_idx_Dhl  = pcA_Dhl[6:2];  // lookup for the branch in D
-  assign bp_idx_X0hl = pcA_X0hl[6:2]; // update for the branch in X0
+  // BTB target checks for D (to ctrl): does the target F used match?
+  assign btb_match_br_Dhl = ( branch_targ_Dhl == btb_targ_Dhl );
+  assign btb_match_j_Dhl  = ( jump_targ_Dhl   == btb_targ_Dhl );
 
 endmodule
 

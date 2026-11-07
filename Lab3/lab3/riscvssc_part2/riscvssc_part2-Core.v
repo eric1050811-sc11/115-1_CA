@@ -115,9 +115,14 @@ module riscv_Core
   wire        branch_cond_ltu_X0hl;
   wire        branch_cond_ge_X0hl;
   wire        branch_cond_geu_X0hl;
-  // Branch predictor index bits, dpath -> ctrl
-  wire [ 4:0] bp_idx_Dhl;  // predictor index: pcA_Dhl[6:2]
-  wire [ 4:0] bp_idx_X0hl; // predictor index: pcA_X0hl[6:2]
+
+  wire        btb_taken0_Fhl;
+  wire        btb_taken1_Fhl;
+  wire        btb_match_br_Dhl;
+  wire        btb_match_j_Dhl;
+  wire        btb_br_upd_X0hl;
+  wire        btb_br_taken_X0hl;
+  wire        btb_jal_fill_Dhl;
   wire [31:0] proc2csr_data_Whl;
 
   //----------------------------------------------------------------------
@@ -286,9 +291,13 @@ module riscv_Core
     .branch_cond_ltu_X0hl	  (branch_cond_ltu_X0hl),
     .branch_cond_ge_X0hl	  (branch_cond_ge_X0hl),
     .branch_cond_geu_X0hl	  (branch_cond_geu_X0hl),
-    // Branch predictor index bits (ctrl inputs)
-    .bp_idx_Dhl             (bp_idx_Dhl),  // predictor index: pcA_Dhl[6:2]
-    .bp_idx_X0hl            (bp_idx_X0hl), // predictor index: pcA_X0hl[6:2]
+    .btb_taken0_Fhl         (btb_taken0_Fhl),
+    .btb_taken1_Fhl         (btb_taken1_Fhl),
+    .btb_match_br_Dhl       (btb_match_br_Dhl),
+    .btb_match_j_Dhl        (btb_match_j_Dhl),
+    .btb_br_upd_X0hl        (btb_br_upd_X0hl),
+    .btb_br_taken_X0hl      (btb_br_taken_X0hl),
+    .btb_jal_fill_Dhl       (btb_jal_fill_Dhl),
     .proc2csr_data_Whl      (proc2csr_data_Whl),
 
     // CSR Status
@@ -362,9 +371,13 @@ module riscv_Core
     .branch_cond_ltu_X0hl	   (branch_cond_ltu_X0hl),
     .branch_cond_ge_X0hl	   (branch_cond_ge_X0hl),
     .branch_cond_geu_X0hl	   (branch_cond_geu_X0hl),
-    // Branch predictor index bits (dpath outputs)
-    .bp_idx_Dhl              (bp_idx_Dhl),  // predictor index: pcA_Dhl[6:2]
-    .bp_idx_X0hl             (bp_idx_X0hl), // predictor index: pcA_X0hl[6:2]
+    .btb_taken0_Fhl          (btb_taken0_Fhl),
+    .btb_taken1_Fhl          (btb_taken1_Fhl),
+    .btb_match_br_Dhl        (btb_match_br_Dhl),
+    .btb_match_j_Dhl         (btb_match_j_Dhl),
+    .btb_br_upd_X0hl         (btb_br_upd_X0hl),
+    .btb_br_taken_X0hl       (btb_br_taken_X0hl),
+    .btb_jal_fill_Dhl        (btb_jal_fill_Dhl),
     .proc2csr_data_Whl       (proc2csr_data_Whl)
   );
 

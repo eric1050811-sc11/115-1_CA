@@ -86,8 +86,13 @@ module riscv_CoreCtrl
   input             branch_cond_ltu_X0hl,
   input             branch_cond_ge_X0hl,
   input             branch_cond_geu_X0hl,
-  input      [ 4:0] bp_idx_Dhl,  // predictor index: pcA_Dhl[6:2]
-  input      [ 4:0] bp_idx_X0hl, // predictor index: pcA_X0hl[6:2]
+  input             btb_taken0_Fhl,   // BTB: slot 0 of the pair in F predicted taken
+  input             btb_taken1_Fhl,   // BTB: slot 1 of the pair in F predicted taken
+  input             btb_match_br_Dhl, // BTB target used == branch_targ_Dhl
+  input             btb_match_j_Dhl,  // BTB target used == jump_targ_Dhl
+  output            btb_br_upd_X0hl,  // update BTB with the branch in X0
+  output            btb_br_taken_X0hl,// its outcome
+  output            btb_jal_fill_Dhl, // fill BTB with the jal leaving D
   input      [31:0] proc2csr_data_Whl,
 
   // CSR Status
@@ -105,17 +110,20 @@ module riscv_CoreCtrl
   //   1. misprediction in X0 (the branch has already issued, so it is not
   //      gated with issue_A): should have been taken -> branch target,
   //      should not have been taken -> the branch's fall-through PC
-  //   2. redirect from D, only if the instruction in A issues: a jump, or
-  //      a predicted-taken branch -> branch target computed in D
-  //   3. otherwise the next pair
+  //   2. redirect from D, only if the instruction in A issues: a jump that
+  //      F did not already redirect to the same target
+  //   3. D undoes a wrong F guess -> the D pair's pc+8
+  //   4. F guess: BTB hit and predicted taken -> BTB target
+  //   5. otherwise the next pair
   // A correctly predicted taken branch in X0 does not redirect again.
 
   assign pc_mux_sel_Phl
-    = bp_miss_taken_X0hl                   ? pmx_b  // Use branch address from X0
-    : bp_miss_nottaken_X0hl                ? pmx_f  // Use fall-through of the branch in X0
-    : (issue_A_Dhl && brj_taken_Dhl)       ? {1'b0, pc_mux_sel_Dhl}
-    : (issue_A_Dhl && bp_pred_taken_A_Dhl) ? pmx_bd // Use branch address from D (predicted taken)
-    :                                        pmx_p; // Use pc+8 (next pair)
+    = bp_miss_taken_X0hl            ? pmx_b
+    : bp_miss_nottaken_X0hl         ? pmx_f
+    : d_jump_redir_Dhl              ? {1'b0, pc_mux_sel_Dhl}
+    : f_corr_Dhl                    ? pmx_seq
+    : ( f_pred0_Fhl || f_pred1_Fhl )? pmx_btb
+    :                                 pmx_p;
 
   // Dummy Squash Signal
 
@@ -288,8 +296,13 @@ module riscv_CoreCtrl
   // branch in X0 does not squash.
 
   assign squash_Fhl
-    = ( issue_A_Dhl && (brj_taken_Dhl || bp_pred_taken_A_Dhl) )
-   || bp_miss_X0hl;
+    = d_jump_redir_Dhl || f_corr_Dhl || bp_miss_X0hl;
+
+  // F guess: only for a real pair in F (not a bubble, not squashed, not an
+  // abandoned fetch). Slot 0 wins; slot 1 is then on the wrong path.
+  wire f_guess_ok_Fhl = !bubble_Fhl && !squash_Fhl && !imem_abandoned_Fhl;
+  wire f_pred0_Fhl    = f_guess_ok_Fhl &&  btb_taken0_Fhl;
+  wire f_pred1_Fhl    = f_guess_ok_Fhl && !btb_taken0_Fhl && btb_taken1_Fhl;
 
   // Stall in F if D is stalled or the fetch pair has not fully returned
 
@@ -309,14 +322,20 @@ module riscv_CoreCtrl
   reg [31:0] ir0_Dhl;
   reg [31:0] ir1_Dhl;
   reg        bubble_Dhl;
+  reg        f_pred0_Dhl;
+  reg        f_pred1_Dhl;
 
   always @ ( posedge clk ) begin
     if ( reset ) begin
       bubble_Dhl <= 1'b1;
+      f_pred0_Dhl <= 1'b0;
+      f_pred1_Dhl <= 1'b0;
     end
     else if( !stall_Dhl ) begin
       ir0_Dhl    <= imem_inst0_Fhl;
       ir1_Dhl    <= imem_inst1_Fhl;
+      f_pred0_Dhl <= f_pred0_Fhl;
+      f_pred1_Dhl <= f_pred1_Fhl;
       bubble_Dhl <= bubble_next_Fhl;
     end
   end
@@ -362,8 +381,9 @@ module riscv_CoreCtrl
 
   localparam pmx_p  = 3'd0;  // Use pc+8 (next pair)
   localparam pmx_b  = 3'd1;  // Use branch address from X0
-  localparam pmx_bd = 3'd4;  // Use branch address from D (predicted taken)
   localparam pmx_f  = 3'd5;  // Use fall-through of the branch in X0
+  localparam pmx_btb = 3'd6; // Use BTB target (F guess)
+  localparam pmx_seq = 3'd7; // Use the D pair's pc+8 (D undoes F's guess)
 
   // Operand 0 Bypass Mux Select
 
@@ -741,15 +761,12 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
   wire is_alu_0    = !is_nonalu_0;
   wire is_alu_1    = !is_nonalu_1;
 
-  // Branch predictor: 32 two-bit saturating counters, indexed by
-  // pcA[6:2] from the datapath. Only FUA handles branches, so one lookup
-  // in D and one update in X0 per cycle are enough. The target is
-  // branch_targ_Dhl, which the datapath already computes in D.
-
-  reg [1:0] bp_table [0:31];
+  // Branch prediction: the branch steered to FUA is predicted taken only
+  // if F guessed it (BTB hit, predicted taken) and the BTB target matches
+  // branch_targ_Dhl. Otherwise it is predicted not taken.
 
   wire is_branch_A_Dhl     = (br_sel_Dhl != br_none);
-  wire bp_pred_taken_A_Dhl = is_branch_A_Dhl && bp_table[bp_idx_Dhl][1];
+  wire bp_pred_taken_A_Dhl = is_branch_A_Dhl && f_pred_A_Dhl && btb_match_br_Dhl;
 
   // inst0 jump / branch
   wire is_jump_0_Dhl = cs0[`RISCV_INST_MSG_J_EN];
@@ -761,6 +778,23 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
   // branch keeps the row 6 hold.
   wire drop_1_Dhl = is_jump_0_Dhl
                  || ( !inst0_issued_Dhl && is_branch_0_Dhl && bp_pred_taken_A_Dhl );
+
+  // D checks F's guess.
+  wire f_pred_A_Dhl = steering_mux_sel_Dhl ? f_pred1_Dhl : f_pred0_Dhl;
+  wire is_jal_A_Dhl = brj_taken_Dhl && ( pc_mux_sel_Dhl == pm_j );
+  wire f_done_j_Dhl = f_pred_A_Dhl && is_jal_A_Dhl && btb_match_j_Dhl;
+
+  // A jump redirects from D, unless F already went to the same target.
+  // A predicted-taken branch never redirects from D: F already did.
+  wire d_jump_redir_Dhl = issue_A_Dhl && brj_taken_Dhl && !f_done_j_Dhl;
+
+  // F guessed a slot taken, but D says that slot does not redirect
+  wire d_taken_A_Dhl   = brj_taken_Dhl || bp_pred_taken_A_Dhl;
+  wire taken_slot0_Dhl = !steering_mux_sel_Dhl && d_taken_A_Dhl;
+  wire taken_slot1_Dhl =  steering_mux_sel_Dhl && d_taken_A_Dhl;
+  wire issue_1_Dhl     = inst_val_Dhl && !stall_1_Dhl;
+  wire f_corr_Dhl      = ( f_pred0_Dhl && issue_0_Dhl && !taken_slot0_Dhl )
+                      || ( f_pred1_Dhl && issue_1_Dhl && !taken_slot1_Dhl );
 
   // Hazard between inst0 and inst1
   wire raw_1_on_0_Dhl = rf0_wen_Dhl && (rf0_waddr_Dhl != 5'd0) && (
@@ -929,7 +963,31 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
     end
   end
 
-  `endif
+  reg [31:0] f_used;
+  reg [31:0] f_corr_cnt;
+  reg [31:0] d_redir_cnt;
+
+  always @(posedge clk) begin
+    if (reset) begin
+      f_used <= 0;
+      f_corr_cnt <= 0;
+      d_redir_cnt <= 0;
+    end
+    else begin
+      if (imem_pair_consumed_Fhl && (f_pred0_Fhl||f_pred1_Fhl) && pc_mux_sel_Phl==pmx_btb)
+        f_used <= f_used + 1;
+      if (f_corr_Dhl && pc_mux_sel_Phl==pmx_seq)
+        f_corr_cnt <= f_corr_cnt + 1;
+      if (d_jump_redir_Dhl && !bp_miss_X0hl)
+        d_redir_cnt <= d_redir_cnt + 1;
+    end
+  end
+
+  always @(posedge clk) begin
+    if (!reset && profile_printed===1'b0 && csr_status != 0) begin
+      $display(" fp f_guesses_used=%0d d_corrections=%0d d_redirects=%0d", f_used, f_corr_cnt, d_redir_cnt);
+    end
+  end
 
   always @(*) begin
     // FUA
@@ -1336,20 +1394,10 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
   wire bp_miss_nottaken_X0hl = is_branch_X0hl && !any_br_taken_X0hl &&  bp_pred_taken_X0hl;
   wire bp_miss_X0hl          = bp_miss_taken_X0hl || bp_miss_nottaken_X0hl;
 
-  // Table update
-  integer bp_i;
-  always @( posedge clk ) begin
-    if (reset) begin
-      for (bp_i = 0; bp_i < 32; bp_i = bp_i + 1)
-        bp_table[bp_i] <= 2'b01; // weakly not taken
-    end
-    else if (is_branch_X0hl && !stall_X0hl) begin
-      if (any_br_taken_X0hl && (bp_table[bp_idx_X0hl] != 2'b11))
-        bp_table[bp_idx_X0hl] <= bp_table[bp_idx_X0hl] + 2'b01;
-      else if (!any_br_taken_X0hl && (bp_table[bp_idx_X0hl] != 2'b00))
-        bp_table[bp_idx_X0hl] <= bp_table[bp_idx_X0hl] - 2'b01;
-    end
-  end
+  // BTB update / fill
+  assign btb_br_upd_X0hl   = is_branch_X0hl && !stall_X0hl;
+  assign btb_br_taken_X0hl = any_br_taken_X0hl;
+  assign btb_jal_fill_Dhl  = issue_A_Dhl && is_jal_A_Dhl;
 
   // Dummy Squash Signal
 
