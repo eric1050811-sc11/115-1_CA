@@ -44,7 +44,7 @@ module riscv_CoreCtrl
 
   // Controls Signals (ctrl->dpath)
 
-  output     [ 1:0] pc_mux_sel_Phl,
+  output     [ 2:0] pc_mux_sel_Phl,       // widen for branch prediction
   output reg        steering_mux_sel_Dhl,
   output reg [ 3:0] opA0_byp_mux_sel_Dhl,
   output reg [ 1:0] opA0_mux_sel_Dhl,
@@ -86,6 +86,8 @@ module riscv_CoreCtrl
   input             branch_cond_ltu_X0hl,
   input             branch_cond_ge_X0hl,
   input             branch_cond_geu_X0hl,
+  input      [ 4:0] bp_idx_Dhl,  // predictor index: pcA_Dhl[6:2]
+  input      [ 4:0] bp_idx_X0hl, // predictor index: pcA_X0hl[6:2]
   input      [31:0] proc2csr_data_Whl,
 
   // CSR Status
@@ -99,10 +101,21 @@ module riscv_CoreCtrl
 
   // PC Mux Select
 
+  // Priority, most urgent first:
+  //   1. misprediction in X0 (the branch has already issued, so it is not
+  //      gated with issue_A): should have been taken -> branch target,
+  //      should not have been taken -> the branch's fall-through PC
+  //   2. redirect from D, only if the instruction in A issues: a jump, or
+  //      a predicted-taken branch -> branch target computed in D
+  //   3. otherwise the next pair
+  // A correctly predicted taken branch in X0 does not redirect again.
+
   assign pc_mux_sel_Phl
-    = brj_taken_X0hl    ? pm_b
-    : (issue_A_Dhl && brj_taken_Dhl)    ? pc_mux_sel_Dhl
-    :                    pm_p;
+    = bp_miss_taken_X0hl                   ? pmx_b  // Use branch address from X0
+    : bp_miss_nottaken_X0hl                ? pmx_f  // Use fall-through of the branch in X0
+    : (issue_A_Dhl && brj_taken_Dhl)       ? {1'b0, pc_mux_sel_Dhl}
+    : (issue_A_Dhl && bp_pred_taken_A_Dhl) ? pmx_bd // Use branch address from D (predicted taken)
+    :                                        pmx_p; // Use pc+8 (next pair)
 
   // Dummy Squash Signal
 
@@ -270,12 +283,13 @@ module riscv_CoreCtrl
 
   wire inst_val_Fhl = ( !bubble_Fhl && !squash_Fhl );
 
-  // Squash instruction in F stage if branch taken for a valid
-  // instruction or if there was an exception in X stage
+  // Squash F when D redirects (a jump, or a predicted-taken branch
+  // that issues), or when X0 detects a misprediction. A correctly predicted
+  // branch in X0 does not squash.
 
   assign squash_Fhl
-    = ( issue_A_Dhl && brj_taken_Dhl )
-   || ( inst_val_X0hl && brj_taken_X0hl );
+    = ( issue_A_Dhl && (brj_taken_Dhl || bp_pred_taken_A_Dhl) )
+   || bp_miss_X0hl;
 
   // Stall in F if D is stalled or the fetch pair has not fully returned
 
@@ -334,11 +348,22 @@ module riscv_CoreCtrl
 
   // PC Mux Select
 
+  // Original pm_* stay 2 bits: the cs0/cs1 tables concatenate them into the 2-bit
+  // RISCV_INST_MSG_PC_SEL field, so widening them would shift every field.
+
   localparam pm_x   = 2'bx;  // Don't care
   localparam pm_p   = 2'd0;  // Use pc+4
   localparam pm_b   = 2'd1;  // Use branch address
   localparam pm_j   = 2'd2;  // Use jump address
   localparam pm_r   = 2'd3;  // Use jump register
+
+  // Add 3-bit PC mux select to the datapath: 0-3 are pm_* zero-extended,
+  // 4 and 5 are the two new inputs added for branch prediction.
+
+  localparam pmx_p  = 3'd0;  // Use pc+8 (next pair)
+  localparam pmx_b  = 3'd1;  // Use branch address from X0
+  localparam pmx_bd = 3'd4;  // Use branch address from D (predicted taken)
+  localparam pmx_f  = 3'd5;  // Use fall-through of the branch in X0
 
   // Operand 0 Bypass Mux Select
 
@@ -716,9 +741,26 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
   wire is_alu_0    = !is_nonalu_0;
   wire is_alu_1    = !is_nonalu_1;
 
+  // Branch predictor: 32 two-bit saturating counters, indexed by
+  // pcA[6:2] from the datapath. Only FUA handles branches, so one lookup
+  // in D and one update in X0 per cycle are enough. The target is
+  // branch_targ_Dhl, which the datapath already computes in D.
+
+  reg [1:0] bp_table [0:31];
+
+  wire is_branch_A_Dhl     = (br_sel_Dhl != br_none);
+  wire bp_pred_taken_A_Dhl = is_branch_A_Dhl && bp_table[bp_idx_Dhl][1];
+
   // inst0 jump / branch
   wire is_jump_0_Dhl = cs0[`RISCV_INST_MSG_J_EN];
   wire is_branch_0_Dhl = (br_sel_0_Dhl != br_none);
+
+  // A predicted-taken branch in inst0 behaves like a jump: inst1 is
+  // on the wrong path, so it is dropped instead of held (row 6). On inst0's
+  // turn sel is 0, so the instruction in A is inst0. A predicted-not-taken
+  // branch keeps the row 6 hold.
+  wire drop_1_Dhl = is_jump_0_Dhl
+                 || ( !inst0_issued_Dhl && is_branch_0_Dhl && bp_pred_taken_A_Dhl );
 
   // Hazard between inst0 and inst1
   wire raw_1_on_0_Dhl = rf0_wen_Dhl && (rf0_waddr_Dhl != 5'd0) && (
@@ -779,6 +821,28 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
   reg [31:0] profile_inst1hazard;   // inst0 issues alone, inst1 hazard
   reg [31:0] profile_dual_issue;    // both instructions issue
   reg [31:0] profile_total;         // all cycles, for the sum check
+  reg [31:0] profile_branches;      // branches resolved in X0 (not a cycle category)
+  reg [31:0] profile_br_taken;      // of those, actually taken
+  reg [31:0] profile_br_nottaken;   // of those, actually not taken
+  reg [31:0] profile_mispredicts;   // of those, mispredicted
+
+  always @(posedge clk) begin
+    if (reset) begin
+      profile_branches     <= 32'd0;
+      profile_br_taken     <= 32'd0;
+      profile_br_nottaken  <= 32'd0;
+      profile_mispredicts  <= 32'd0;
+    end
+    else if (is_branch_X0hl && !stall_X0hl) begin
+      profile_branches    <= profile_branches + 1;
+      if (any_br_taken_X0hl)
+        profile_br_taken    <= profile_br_taken + 1;
+      else
+        profile_br_nottaken <= profile_br_nottaken + 1;
+      if (bp_miss_X0hl)
+        profile_mispredicts <= profile_mispredicts + 1;
+    end
+  end
 
   always @(posedge clk) begin
     if (reset) begin
@@ -853,6 +917,10 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
       $display( " mem_stall       = %d", profile_memstall     );
       $display( " d_empty         = %d", profile_dempty       );
       $display( " total           = %d", profile_total        );
+      $display( " branches        = %d", profile_branches     );
+      $display( " br_taken        = %d", profile_br_taken     );
+      $display( " br_nottaken     = %d", profile_br_nottaken  );
+      $display( " mispredicts     = %d", profile_mispredicts  );
       $display( " sum_categories  = %d",
                 profile_dual_issue + profile_turn2_issue + profile_turn2_hazard
               + profile_jump + profile_br_hold + profile_both_nonalu
@@ -1127,16 +1195,18 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
   // Squash and Stall Logic
   //----------------------------------------------------------------------
 
-  // Squash instruction in D if a valid branch in X is taken
+  // Squash D only on a misprediction in X0. After a correctly
+  // predicted taken branch, D already holds the target's instructions.
 
-  wire squash_Dhl = ( inst_val_X0hl && brj_taken_X0hl );
+  wire squash_Dhl = bp_miss_X0hl;
 
   // Aggregate Stall Signal
 
-  // D holds the pair until all of it has left (a jump in inst0 drops inst1)
+  // D holds the pair until all of it has left (a jump or a predicted-taken
+  // branch in inst0 drops inst1)
   assign stall_Dhl = stall_X0hl || (inst_val_Dhl &&
                                     (inst0_issued_Dhl ? stall_1_Dhl
-                                                      : (stall_0_Dhl || (!is_jump_0_Dhl && stall_1_Dhl)))
+                                                      : (stall_0_Dhl || (!drop_1_Dhl && stall_1_Dhl)))
                                    );
 
   // Next bubble bit
@@ -1155,9 +1225,13 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
   // X0 <- D
   //----------------------------------------------------------------------
 
+  // The D-stage prediction travels into X0 with the branch. The
+  // table index comes from pcA_X0hl in the datapath, so no register here.
+
   // FUA
   reg [31:0] irA_X0hl;
   reg  [2:0] br_sel_X0hl;
+  reg        bp_pred_taken_X0hl;
   reg        muldivreq_val_X0hl;
   reg        muldiv_mux_sel_X0hl;
   reg        execute_mux_sel_X0hl;
@@ -1190,6 +1264,7 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
     else if( !stall_X0hl ) begin
       irA_X0hl              <= instA_Dhl;
       br_sel_X0hl           <= br_sel_Dhl;
+      bp_pred_taken_X0hl    <= bp_pred_taken_A_Dhl;
       aluA_fn_X0hl          <= aluA_fn_Dhl;
       muldivreq_val_X0hl    <= muldivreq_val_Dhl;
       muldiv_mux_sel_X0hl   <= muldiv_mux_sel_Dhl;
@@ -1254,6 +1329,27 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
    ||   bgeu_taken_X0hl );
 
   wire brj_taken_X0hl = ( inst_val_X0hl && any_br_taken_X0hl );
+
+  // Misprediction check
+  wire is_branch_X0hl        = inst_val_X0hl && (br_sel_X0hl != br_none);
+  wire bp_miss_taken_X0hl    = is_branch_X0hl &&  any_br_taken_X0hl && !bp_pred_taken_X0hl;
+  wire bp_miss_nottaken_X0hl = is_branch_X0hl && !any_br_taken_X0hl &&  bp_pred_taken_X0hl;
+  wire bp_miss_X0hl          = bp_miss_taken_X0hl || bp_miss_nottaken_X0hl;
+
+  // Table update
+  integer bp_i;
+  always @( posedge clk ) begin
+    if (reset) begin
+      for (bp_i = 0; bp_i < 32; bp_i = bp_i + 1)
+        bp_table[bp_i] <= 2'b01; // weakly not taken
+    end
+    else if (is_branch_X0hl && !stall_X0hl) begin
+      if (any_br_taken_X0hl && (bp_table[bp_idx_X0hl] != 2'b11))
+        bp_table[bp_idx_X0hl] <= bp_table[bp_idx_X0hl] + 2'b01;
+      else if (!any_br_taken_X0hl && (bp_table[bp_idx_X0hl] != 2'b00))
+        bp_table[bp_idx_X0hl] <= bp_table[bp_idx_X0hl] - 2'b01;
+    end
+  end
 
   // Dummy Squash Signal
 

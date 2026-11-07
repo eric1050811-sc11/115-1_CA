@@ -29,7 +29,7 @@ module riscv_CoreDpath
 
   input         imem_initial_fetch_Fhl,
   input         squash_Fhl,
-  input   [1:0] pc_mux_sel_Phl,
+  input   [2:0] pc_mux_sel_Phl,       // widen for branch prediction
   input         steering_mux_sel_Dhl,
   input   [3:0] opA0_byp_mux_sel_Dhl,
   input   [1:0] opA0_mux_sel_Dhl,
@@ -72,6 +72,9 @@ module riscv_CoreDpath
   output        branch_cond_ltu_X0hl,
   output        branch_cond_ge_X0hl,
   output        branch_cond_geu_X0hl,
+  // Branch predictor table index: pcA_Dhl (lookup in D), pcA_X0hl (update in X0)
+  output [ 4:0] bp_idx_Dhl,  // predictor index: pcA_Dhl[6:2]
+  output [ 4:0] bp_idx_X0hl, // predictor index: pcA_X0hl[6:2]
   output [31:0] proc2csr_data_Whl
 );
 
@@ -96,11 +99,19 @@ module riscv_CoreDpath
   assign jump_targ_Phl      = jump_targ_Dhl;
   assign jumpreg_targ_Phl   = jumpreg_targ_Dhl;
 
+  // Branch prediction adds two inputs (encodings match pmx_* in ctrl):
+  //   4: branch target from D, for a predicted-taken branch
+  //   5: fall-through PC of the branch in X0, for a predicted-taken branch
+  //      that was not taken
+  // Input 0 is the pair's pc+8, not pc+4.
+
   assign pc_mux_out_Phl
-    = ( pc_mux_sel_Phl == 2'd0 ) ? pc_plus8_Phl
-    : ( pc_mux_sel_Phl == 2'd1 ) ? branch_targ_Phl
-    : ( pc_mux_sel_Phl == 2'd2 ) ? jump_targ_Phl
-    : ( pc_mux_sel_Phl == 2'd3 ) ? jumpreg_targ_Phl
+    = ( pc_mux_sel_Phl == 3'd0 ) ? pc_plus8_Phl
+    : ( pc_mux_sel_Phl == 3'd1 ) ? branch_targ_Phl
+    : ( pc_mux_sel_Phl == 3'd2 ) ? jump_targ_Phl
+    : ( pc_mux_sel_Phl == 3'd3 ) ? jumpreg_targ_Phl
+    : ( pc_mux_sel_Phl == 3'd4 ) ? branch_targ_Dhl
+    : ( pc_mux_sel_Phl == 3'd5 ) ? pcA_plus4_X0hl
     :                              32'bx;
 
 
@@ -121,8 +132,12 @@ module riscv_CoreDpath
     end
   end
 
+  // A redirect in the current cycle wins over a pending one: with branch
+  // prediction, a D redirect can be pending when the same branch
+  // mispredicts in X0, and the X0 redirect must not be lost.
+
   wire [31:0] pc_mux_out_final_Phl
-    = pc_redirect_pending ? pc_redirect_targ : pc_mux_out_Phl;
+    = ( pc_redirect_pending && !squash_Fhl ) ? pc_redirect_targ : pc_mux_out_Phl;
 
   // Send out imem request early. riscv_Core derives the second fetch
   // address (pc+4) and holds both stable across a pending request.
@@ -416,6 +431,7 @@ module riscv_CoreDpath
   reg [31:0] opB0_mux_out_X0hl;
   reg [31:0] opB1_mux_out_X0hl;
   reg [31:0] wdata_X0hl;
+  reg [31:0] pcA_plus4_X0hl;
 
   always @ (posedge clk) begin
     if( !stall_X0hl ) begin
@@ -427,6 +443,7 @@ module riscv_CoreDpath
       opB0_mux_out_X0hl <= opB0_mux_out_Dhl;
       opB1_mux_out_X0hl <= opB1_mux_out_Dhl;
       wdata_X0hl        <= wdata_Dhl;
+      pcA_plus4_X0hl    <= pcA_plus4_Dhl;
     end
   end
 
@@ -659,6 +676,10 @@ module riscv_CoreDpath
     pcA_debug <= pcA_Whl;
     pcB_debug <= pcB_Whl;
   end
+
+  // Branch predictor index (to ctrl)
+  assign bp_idx_Dhl  = pcA_Dhl[6:2];  // lookup for the branch in D
+  assign bp_idx_X0hl = pcA_X0hl[6:2]; // update for the branch in X0
 
 endmodule
 

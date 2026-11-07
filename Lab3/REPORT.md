@@ -126,8 +126,68 @@ A total counter checks that the categories add up to `num_cycles` reported by th
 | Dual issue                | 168 (12%) | 109 ( 7%) |  273 ( 7%) | 2010 (23%) |
 | Total (= `num_cycles`)    | **1424**  |  **1578** |  **3826**  |  **8809**  |
 
-1. Decode is empty for about a third of all cycles in vvadd, bin-search and masked-filter
+To see what empties decode, I also counted control-flow instructions (branches resolved in X0, and jumps leaving decode). These are counts, not cycle categories:
+
+|                             | vvadd     | bin-search | cmplx-mult | masked-filter |
+| :-------------------------- | --------: | ---------: | ---------: | ---------: |
+| Branches                    | 158       | 262        | 300        | 1224       |
+| Taken                       | 145 (92%) | 135 (52%)  | 105 (35%)  | 1114 (91%) |
+| Not taken                   | 13 ( 8%)  | 127 (48%)  | 195 (65%)  | 110 ( 9%)  |
+| Jumps                       | 5         | 55         | 35         | 8          |
+| D empty / (taken + jumps)   | 2.9       | 2.5        | 3.1        | 2.8        |
+
+1. Decode is empty for about a third of all cycles in vvadd, bin-search and masked-filter. Dividing the D-empty cycles by the redirects (taken branches and jumps) gives 2.5–3.1 cycles each, so nearly all of them are the refill after a taken branch resolves in X0
 2. True dual issue is rare (7–23%). Most cycles issue one instruction
 3. The single-issue causes differ by benchmark: vvadd and cmplx-mult are limited by pairs that both need FUA (memory and mul/div), bin-search by RAW and branch hold, and cmplx-mult also waits for mul/div results (second-turn hazard)
 4. Memory stalls are 0, as expected with fixed memory latency
 5. WAW pairs are negligible (2 cycles in every benchmark), so letting WAW pairs dual-issue is not worth optimizing
+
+### Branch prediction
+
+The profile shows that D empty is the largest category in vvadd, bin-search and masked-filter, and that almost all of it is the 2.5–3.1 cycle refill after each taken branch, which only redirects once it resolves in X0. So the first optimization is branch prediction.
+
+Here I choose to predict at decode stage, since in dpath's decode stage there is already a signal `branch_targ_Dhl` that calculates the target address.
+
+First thing first, we build the prediction counter in control. Here I choose to use 2-bit saturating counters with 32 direct-mapped entries, indexed by bits 6–2 of the branch's PC (from FUA in decode for the lookup, from X0 for the update), initialized to `2'b01` (weakly not taken). With this initial state, a branch behaves exactly like in Part 1 until it has been seen taken; starting at weakly taken instead changed the cycle counts by less than 25 cycles, in both directions. The counter is updated once per branch in X0 (not while X0 is stalled), counting up if taken and down if not, saturating at `00` and `11`. X0 also reports whether the prediction was wrong, so the PC can be set back to the correct address.
+
+In decode, a branch steered to FUA that is predicted taken redirects the PC to `branch_targ_Dhl` and squashes fetch, the same way a jump does. This works whether the branch is inst0 or inst1. If inst0 is predicted taken, inst1 is on the wrong path and is dropped. Otherwise, inst1 is held for one cycle as in Part 1, and is squashed if the branch turns out to be taken.
+
+In X0, the branch's outcome is compared with the prediction it carried from decode. Unlike Part 1, a correctly predicted taken branch must not redirect or squash again, since decode already holds instructions from the target. On a misprediction, the PC mux selects the other address (the branch target, or the branch's fall-through PC), and fetch and decode are squashed. A misprediction from X0 has priority over a redirect from decode.
+
+Lastly are the small modifications:
+
+- Dpath provides the predictor index bits (`pcA[6:2]`) from decode and X0 to control
+- Control has the two index inputs
+- Connect the 2 added ports between control and dpath in Core
+- Widen the PC mux select to 3 bits across Core, control and dpath, for two new inputs: `branch_targ_Dhl` (predicted taken) and the fall-through PC of the branch in X0, which needs a new X0 pipeline register `pcA_plus4_X0hl`
+- Fix the pending-redirect latch in dpath, so a redirect in the current cycle wins over a pending one; otherwise an X0 misprediction could be lost behind an older decode redirect
+- Update squash/stall logic in fetch, decode stages
+
+Here are the profiling results after adding branch prediction:
+
+| Category                  | vvadd     | bin-search | cmplx-mult | masked-filter |
+| :------------------------ | --------: | --------: | ---------: | ---------: |
+| D empty                   | 241 (20%) | 381 (26%) |  362 (10%) | 1592 (22%) |
+| Mem stall                 |   0 ( 0%) |   0 ( 0%) |    0 ( 0%) |    0 ( 0%) |
+| Second turn, inst1 issues | 321 (26%) | 366 (25%) | 1195 (32%) | 1153 (16%) |
+| inst0 hazard              |  85 ( 7%) |  58 ( 4%) |  112 ( 3%) |  620 ( 8%) |
+| inst1 hazard              |   0 ( 0%) |   6 ( 0%) |    0 ( 0%) |   28 ( 0%) |
+| Jump                      |   3 ( 0%) |   4 ( 0%) |    4 ( 0%) |    3 ( 0%) |
+| Branch hold               |  90 ( 7%) | 191 (13%) |  120 ( 3%) |  752 (10%) |
+| Both non-ALU              | 284 (23%) |  45 ( 3%) |  831 (22%) |  745 (10%) |
+| RAW                       |  31 ( 3%) | 239 (16%) |  258 ( 7%) |  320 ( 4%) |
+| WAW                       |   2 ( 0%) |   2 ( 0%) |    2 ( 0%) |    2 ( 0%) |
+| Second turn, inst1 hazard |   3 ( 0%) |  30 ( 2%) |  604 (16%) |  171 ( 2%) |
+| Dual issue                | 168 (14%) | 138 ( 9%) |  271 ( 7%) | 1982 (27%) |
+| Total (= `num_cycles`)    | **1228**  |  **1460** |  **3759**  |  **7368**  |
+| Mispredicted branches     | 20 / 158 (13%) | 62 / 262 (24%) | 28 / 300 (9%) | 88 / 1224 (7%) |
+
+D-empty cycles drop by 45% in vvadd and 48% in masked-filter, and meets the Level 1 cycle requirements for all four benchmarks:
+
+| ubmark        | Part 1 | Branch prediction | Change | Level 1 limit | Level 2 limit |
+| :------------ | -----: | ----------------: | -----: | ------------: | ------------: |
+| vvadd         | 1424   | 1228              | −13.8% | 1400          | 1200          |
+| bin-search    | 1578   | 1460              | −7.5%  | 1500          | 1300          |
+| cmplx-mult    | 3826   | 3759              | −1.8%  | 4000          | 3500          |
+| masked-filter | 8809   | 7368              | −16.4% | 8500          | 7500          |
+

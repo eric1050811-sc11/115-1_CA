@@ -73,7 +73,7 @@ module riscv_Core
   wire [31:0] dmemreq_msg_data;
   wire [31:0] dmemresp_msg_data;
 
-  wire  [1:0] pc_mux_sel_Phl;
+  wire  [2:0] pc_mux_sel_Phl;       // widen for branch prediction
   wire        steering_mux_sel_Dhl;
   wire  [3:0] opA0_byp_mux_sel_Dhl;
   wire  [1:0] opA0_mux_sel_Dhl;
@@ -115,6 +115,9 @@ module riscv_Core
   wire        branch_cond_ltu_X0hl;
   wire        branch_cond_ge_X0hl;
   wire        branch_cond_geu_X0hl;
+  // Branch predictor index bits, dpath -> ctrl
+  wire [ 4:0] bp_idx_Dhl;  // predictor index: pcA_Dhl[6:2]
+  wire [ 4:0] bp_idx_X0hl; // predictor index: pcA_X0hl[6:2]
   wire [31:0] proc2csr_data_Whl;
 
   //----------------------------------------------------------------------
@@ -283,6 +286,9 @@ module riscv_Core
     .branch_cond_ltu_X0hl	  (branch_cond_ltu_X0hl),
     .branch_cond_ge_X0hl	  (branch_cond_ge_X0hl),
     .branch_cond_geu_X0hl	  (branch_cond_geu_X0hl),
+    // Branch predictor index bits (ctrl inputs)
+    .bp_idx_Dhl             (bp_idx_Dhl),  // predictor index: pcA_Dhl[6:2]
+    .bp_idx_X0hl            (bp_idx_X0hl), // predictor index: pcA_X0hl[6:2]
     .proc2csr_data_Whl      (proc2csr_data_Whl),
 
     // CSR Status
@@ -356,6 +362,9 @@ module riscv_Core
     .branch_cond_ltu_X0hl	   (branch_cond_ltu_X0hl),
     .branch_cond_ge_X0hl	   (branch_cond_ge_X0hl),
     .branch_cond_geu_X0hl	   (branch_cond_geu_X0hl),
+    // Branch predictor index bits (dpath outputs)
+    .bp_idx_Dhl              (bp_idx_Dhl),  // predictor index: pcA_Dhl[6:2]
+    .bp_idx_X0hl             (bp_idx_X0hl), // predictor index: pcA_X0hl[6:2]
     .proc2csr_data_Whl       (proc2csr_data_Whl)
   );
 
