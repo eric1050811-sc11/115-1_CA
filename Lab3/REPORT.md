@@ -91,3 +91,43 @@ One design is worth mentioning here: when inst0 is a branch, inst1 is held for o
 | masked-filter | 6961         | 8809   | 0.790 | 24926         | 0.279      |
 
 ## Part 2
+
+### Profiling
+
+To find where the cycles of the Part 1 design go, I added simulation-only counters to the control unit. Every cycle, the instruction pair in decode is put into exactly one category, checked in this order, so the first matching cause gets the blame:
+
+1. D empty: no valid pair in decode (bubble, or squashed by a taken branch/jump)
+2. Mem stall: X0/X1 is stalled, nothing issues
+3. Second turn: inst0 already issued, inst1 issues alone, or waits on a hazard
+4. inst0 hazard: inst0 waits on a load/mul result, nothing issues
+5. Jump: inst0 is a jump, inst1 is dropped
+6. Branch hold: inst0 is a branch, inst1 waits
+7. Both non-ALU: both need FUA, inst0 issues alone
+8. RAW: inst1 reads inst0's destination, inst0 issues alone
+9. WAW: inst1 writes inst0's destination (without RAW), inst0 issues alone
+10. inst1 hazard: inst1 waits on a load/mul result, inst0 issues alone
+11. Dual issue: both instructions issue
+
+A total counter checks that the categories add up to `num_cycles` reported by the testbench. The counters print when the program writes its status. All numbers are from the normal (fixed memory latency) runs.
+
+| Category                  | vvadd    | bin-search | cmplx-mult | masked-filter |
+| :------------------------ | --------: | --------: | ---------: | ---------: |
+| D empty                   | 437 (31%) | 470 (30%) |  431 (11%) | 3089 (35%) |
+| Mem stall                 |   0 ( 0%) |   0 ( 0%) |    0 ( 0%) |    0 ( 0%) |
+| Second turn, inst1 issues | 321 (23%) | 396 (25%) | 1194 (31%) | 1126 (13%) |
+| inst0 hazard              |  85 ( 6%) |  77 ( 5%) |  113 ( 3%) |  760 ( 9%) |
+| inst1 hazard              |   0 ( 0%) |   6 ( 0%) |    0 ( 0%) |    0 ( 0%) |
+| Jump                      |   3 ( 0%) |   3 ( 0%) |    4 ( 0%) |    2 ( 0%) |
+| Branch hold               |  90 ( 6%) | 239 (15%) |  119 ( 3%) |  780 ( 9%) |
+| Both non-ALU              | 284 (20%) |  26 ( 2%) |  829 (22%) |  689 ( 8%) |
+| RAW                       |  31 ( 2%) | 239 (15%) |  258 ( 7%) |  348 ( 4%) |
+| WAW                       |   2 ( 0%) |   2 ( 0%) |    2 ( 0%) |    2 ( 0%) |
+| Second turn, inst1 hazard |   3 ( 0%) |  11 ( 1%) |  603 (16%) |    3 ( 0%) |
+| Dual issue                | 168 (12%) | 109 ( 7%) |  273 ( 7%) | 2010 (23%) |
+| Total (= `num_cycles`)    | **1424**  |  **1578** |  **3826**  |  **8809**  |
+
+1. Decode is empty for about a third of all cycles in vvadd, bin-search and masked-filter
+2. True dual issue is rare (7–23%). Most cycles issue one instruction
+3. The single-issue causes differ by benchmark: vvadd and cmplx-mult are limited by pairs that both need FUA (memory and mul/div), bin-search by RAW and branch hold, and cmplx-mult also waits for mul/div results (second-turn hazard)
+4. Memory stalls are 0, as expected with fixed memory latency
+5. WAW pairs are negligible (2 cycles in every benchmark), so letting WAW pairs dual-issue is not worth optimizing

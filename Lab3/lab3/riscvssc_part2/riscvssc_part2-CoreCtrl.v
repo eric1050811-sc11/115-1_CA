@@ -760,6 +760,109 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
                            inst0_issued_Dhl;            // # 10-11
   end
 
+  //----------------------------------------------------------------------
+  // Profiling counters
+  //----------------------------------------------------------------------
+
+  `ifndef SYNTHESIS
+
+  reg [31:0] profile_dempty;        // D empty: bubble or squashed pair
+  reg [31:0] profile_memstall;      // X0/X1 stalled, nothing issues
+  reg [31:0] profile_turn2_hazard;  // 2nd turn, inst1 waits on a hazard
+  reg [31:0] profile_turn2_issue;   // 2nd turn, inst1 issues alone
+  reg [31:0] profile_inst0hazard;   // inst0 hazard, nothing issues
+  reg [31:0] profile_jump;          // inst0 jump issues, inst1 dropped
+  reg [31:0] profile_br_hold;       // inst0 branch issues alone
+  reg [31:0] profile_both_nonalu;   // inst0 issues alone, both need FUA
+  reg [31:0] profile_rawhazard;     // inst0 issues alone, inst1 RAW
+  reg [31:0] profile_wawhazard;     // inst0 issues alone, inst1 WAW
+  reg [31:0] profile_inst1hazard;   // inst0 issues alone, inst1 hazard
+  reg [31:0] profile_dual_issue;    // both instructions issue
+  reg [31:0] profile_total;         // all cycles, for the sum check
+
+  always @(posedge clk) begin
+    if (reset) begin
+      profile_dempty       <= 32'd0;
+      profile_memstall     <= 32'd0;
+      profile_turn2_hazard <= 32'd0;
+      profile_turn2_issue  <= 32'd0;
+      profile_inst0hazard  <= 32'd0;
+      profile_jump         <= 32'd0;
+      profile_br_hold      <= 32'd0;
+      profile_both_nonalu  <= 32'd0;
+      profile_rawhazard    <= 32'd0;
+      profile_wawhazard    <= 32'd0;
+      profile_inst1hazard  <= 32'd0;
+      profile_dual_issue   <= 32'd0;
+      profile_total        <= 32'd0;
+    end
+    else begin
+      profile_total <= profile_total + 1;
+
+      if (!inst_val_Dhl)
+        profile_dempty <= profile_dempty + 1;
+      else if (stall_X0hl)
+        profile_memstall <= profile_memstall + 1;
+      else if (inst0_issued_Dhl) begin
+        if (stall_1_hazard_Dhl)
+          profile_turn2_hazard <= profile_turn2_hazard + 1;
+        else
+          profile_turn2_issue <= profile_turn2_issue + 1;
+      end
+      else if (stall_0_hazard_Dhl)
+        profile_inst0hazard <= profile_inst0hazard + 1;
+      else if (is_jump_0_Dhl)
+        profile_jump <= profile_jump + 1;
+      else if (is_branch_0_Dhl)
+        profile_br_hold <= profile_br_hold + 1;
+      else if (is_nonalu_0 && is_nonalu_1)
+        profile_both_nonalu <= profile_both_nonalu + 1;
+      else if (raw_1_on_0_Dhl)
+        profile_rawhazard <= profile_rawhazard + 1;
+      else if (waw_1_on_0_Dhl)
+        profile_wawhazard <= profile_wawhazard + 1;
+      else if (stall_1_hazard_Dhl)
+        profile_inst1hazard <= profile_inst1hazard + 1;
+      else
+        profile_dual_issue <= profile_dual_issue + 1;
+    end
+  end
+
+  // Print once, when the program writes a nonzero status (end of run)
+
+  reg profile_printed;
+
+  always @(posedge clk) begin
+    if (reset)
+      profile_printed <= 1'b0;
+    else if (!profile_printed && (csr_status != 32'd0)) begin
+      profile_printed <= 1'b1;
+      $display( "--------------------------------------------" );
+      $display( " PROFILE (cycles in D)                      " );
+      $display( "--------------------------------------------" );
+      $display( " dual_issue      = %d", profile_dual_issue   );
+      $display( " turn2_issue     = %d", profile_turn2_issue  );
+      $display( " turn2_hazard    = %d", profile_turn2_hazard );
+      $display( " jump            = %d", profile_jump         );
+      $display( " br_hold         = %d", profile_br_hold      );
+      $display( " both_nonalu     = %d", profile_both_nonalu  );
+      $display( " raw             = %d", profile_rawhazard    );
+      $display( " waw             = %d", profile_wawhazard    );
+      $display( " inst1_hazard    = %d", profile_inst1hazard  );
+      $display( " inst0_hazard    = %d", profile_inst0hazard  );
+      $display( " mem_stall       = %d", profile_memstall     );
+      $display( " d_empty         = %d", profile_dempty       );
+      $display( " total           = %d", profile_total        );
+      $display( " sum_categories  = %d",
+                profile_dual_issue + profile_turn2_issue + profile_turn2_hazard
+              + profile_jump + profile_br_hold + profile_both_nonalu
+              + profile_rawhazard + profile_wawhazard + profile_inst1hazard + profile_inst0hazard
+              + profile_memstall + profile_dempty );
+    end
+  end
+
+  `endif
+
   always @(*) begin
     // FUA
     instA_Dhl            = 0;
