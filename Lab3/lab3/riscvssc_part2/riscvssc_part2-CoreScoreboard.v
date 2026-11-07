@@ -29,6 +29,16 @@ module riscv_CoreScoreboard
   output           stall_0_hazard   ,
   output           stall_1_hazard   ,
 
+  // Late bypass: a source whose producer is a mul in X2. The consumer may
+  // issue and take the value in X0 from the mul result in X3, unless it
+  // uses its operands already in D (nolate_*: mul/div, jalr).
+  input            nolate_0         ,
+  input            nolate_1         ,
+  output           src00_late       ,
+  output           src01_late       ,
+  output           src10_late       ,
+  output           src11_late       ,
+
   output reg [3:0] src00_byp_mux_sel,
   output reg [3:0] src01_byp_mux_sel,
   output reg [3:0] src10_byp_mux_sel,
@@ -246,29 +256,37 @@ module riscv_CoreScoreboard
     end
   end
 
+  // A mul in X2 has its result one stage later, in X3
+  assign src00_late = src00_en && pending[src00] && (functional_unit[src00] == `FUNC_UNIT_MUL) && (reg_latency[src00] == 5'b00100);
+  assign src01_late = src01_en && pending[src01] && (functional_unit[src01] == `FUNC_UNIT_MUL) && (reg_latency[src01] == 5'b00100);
+  assign src10_late = src10_en && pending[src10] && (functional_unit[src10] == `FUNC_UNIT_MUL) && (reg_latency[src10] == 5'b00100);
+  assign src11_late = src11_en && pending[src11] && (functional_unit[src11] == `FUNC_UNIT_MUL) && (reg_latency[src11] == 5'b00100);
+
+  // Not ready: a load in X0, or a mul in X0/X1. A mul in X2 is only a
+  // hazard for a consumer that cannot take the value late.
   assign stall_0_hazard = (
     (src00_en && pending[src00]) && (
       (functional_unit[src00] == `FUNC_UNIT_MEM && reg_latency[src00] == 5'b10000) ||
-      (functional_unit[src00] == `FUNC_UNIT_MUL && reg_latency[src00] >= 5'b00100)
+      (functional_unit[src00] == `FUNC_UNIT_MUL && reg_latency[src00] >= 5'b01000)
     )
   ) || (
     (src01_en && pending[src01]) && (
       (functional_unit[src01] == `FUNC_UNIT_MEM && reg_latency[src01] == 5'b10000) ||
-      (functional_unit[src01] == `FUNC_UNIT_MUL && reg_latency[src01] >= 5'b00100)
+      (functional_unit[src01] == `FUNC_UNIT_MUL && reg_latency[src01] >= 5'b01000)
     )
-  );
+  ) || ( nolate_0 && ( src00_late || src01_late ) );
 
   assign stall_1_hazard = (
     (src10_en && pending[src10]) && (
       (functional_unit[src10] == `FUNC_UNIT_MEM && reg_latency[src10] == 5'b10000) ||
-      (functional_unit[src10] == `FUNC_UNIT_MUL && reg_latency[src10] >= 5'b00100)
+      (functional_unit[src10] == `FUNC_UNIT_MUL && reg_latency[src10] >= 5'b01000)
     )
   ) || (
     (src11_en && pending[src11]) && (
       (functional_unit[src11] == `FUNC_UNIT_MEM && reg_latency[src11] == 5'b10000) ||
-      (functional_unit[src11] == `FUNC_UNIT_MUL && reg_latency[src11] >= 5'b00100)
+      (functional_unit[src11] == `FUNC_UNIT_MUL && reg_latency[src11] >= 5'b01000)
     )
-  );
+  ) || ( nolate_1 && ( src10_late || src11_late ) );
 
 endmodule
 

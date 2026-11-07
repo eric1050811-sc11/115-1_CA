@@ -72,6 +72,11 @@ module riscv_CoreDpath
   output        branch_cond_ltu_X0hl,
   output        branch_cond_ge_X0hl,
   output        branch_cond_geu_X0hl,
+  input         lateA0_X0hl,
+  input         lateA1_X0hl,
+  input         lateWd_X0hl,
+  input         lateB0_X0hl,
+  input         lateB1_X0hl,
   output        btb_taken0_Fhl,
   output        btb_taken1_Fhl,
   output        btb_match_br_Dhl,
@@ -446,11 +451,19 @@ module riscv_CoreDpath
   reg [31:0] pcA_X0hl;
   reg [31:0] pcB_X0hl;
   reg [31:0] branch_targ_X0hl;
-  reg [31:0] opA0_mux_out_X0hl;
-  reg [31:0] opA1_mux_out_X0hl;
-  reg [31:0] opB0_mux_out_X0hl;
-  reg [31:0] opB1_mux_out_X0hl;
-  reg [31:0] wdata_X0hl;
+  reg [31:0] opA0_mux_reg_X0hl;
+  reg [31:0] opA1_mux_reg_X0hl;
+  reg [31:0] opB0_mux_reg_X0hl;
+  reg [31:0] opB1_mux_reg_X0hl;
+  reg [31:0] wdata_reg_X0hl;
+
+  // Late bypass: an operand flagged by ctrl is taken from the mul result
+  // in X3 instead of the value captured in D
+  wire [31:0] opA0_mux_out_X0hl = lateA0_X0hl ? executeA_mux_out_X3hl : opA0_mux_reg_X0hl;
+  wire [31:0] opA1_mux_out_X0hl = lateA1_X0hl ? executeA_mux_out_X3hl : opA1_mux_reg_X0hl;
+  wire [31:0] opB0_mux_out_X0hl = lateB0_X0hl ? executeA_mux_out_X3hl : opB0_mux_reg_X0hl;
+  wire [31:0] opB1_mux_out_X0hl = lateB1_X0hl ? executeA_mux_out_X3hl : opB1_mux_reg_X0hl;
+  wire [31:0] wdata_X0hl        = lateWd_X0hl ? executeA_mux_out_X3hl : wdata_reg_X0hl;
   reg [31:0] pcA_plus4_X0hl;
 
   always @ (posedge clk) begin
@@ -458,12 +471,21 @@ module riscv_CoreDpath
       pcA_X0hl          <= pcA_Dhl;
       pcB_X0hl          <= pcB_Dhl;
       branch_targ_X0hl  <= branch_targ_Dhl;
-      opA0_mux_out_X0hl <= opA0_mux_out_Dhl;
-      opA1_mux_out_X0hl <= opA1_mux_out_Dhl;
-      opB0_mux_out_X0hl <= opB0_mux_out_Dhl;
-      opB1_mux_out_X0hl <= opB1_mux_out_Dhl;
-      wdata_X0hl        <= wdata_Dhl;
+      opA0_mux_reg_X0hl <= opA0_mux_out_Dhl;
+      opA1_mux_reg_X0hl <= opA1_mux_out_Dhl;
+      opB0_mux_reg_X0hl <= opB0_mux_out_Dhl;
+      opB1_mux_reg_X0hl <= opB1_mux_out_Dhl;
+      wdata_reg_X0hl    <= wdata_Dhl;
       pcA_plus4_X0hl    <= pcA_plus4_Dhl;
+    end
+    else begin
+      // X0 stalls: keep a late operand by capturing it now, while the mul
+      // is still in X3 (ctrl clears the flag at the same edge)
+      if ( lateA0_X0hl ) opA0_mux_reg_X0hl <= executeA_mux_out_X3hl;
+      if ( lateA1_X0hl ) opA1_mux_reg_X0hl <= executeA_mux_out_X3hl;
+      if ( lateB0_X0hl ) opB0_mux_reg_X0hl <= executeA_mux_out_X3hl;
+      if ( lateB1_X0hl ) opB1_mux_reg_X0hl <= executeA_mux_out_X3hl;
+      if ( lateWd_X0hl ) wdata_reg_X0hl    <= executeA_mux_out_X3hl;
     end
   end
 

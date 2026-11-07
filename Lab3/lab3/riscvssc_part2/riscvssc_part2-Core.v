@@ -116,6 +116,11 @@ module riscv_Core
   wire        branch_cond_ge_X0hl;
   wire        branch_cond_geu_X0hl;
 
+  wire        lateA0_X0hl;
+  wire        lateA1_X0hl;
+  wire        lateWd_X0hl;
+  wire        lateB0_X0hl;
+  wire        lateB1_X0hl;
   wire        btb_taken0_Fhl;
   wire        btb_taken1_Fhl;
   wire        btb_match_br_Dhl;
@@ -291,6 +296,11 @@ module riscv_Core
     .branch_cond_ltu_X0hl	  (branch_cond_ltu_X0hl),
     .branch_cond_ge_X0hl	  (branch_cond_ge_X0hl),
     .branch_cond_geu_X0hl	  (branch_cond_geu_X0hl),
+    .lateA0_X0hl            (lateA0_X0hl),
+    .lateA1_X0hl            (lateA1_X0hl),
+    .lateWd_X0hl            (lateWd_X0hl),
+    .lateB0_X0hl            (lateB0_X0hl),
+    .lateB1_X0hl            (lateB1_X0hl),
     .btb_taken0_Fhl         (btb_taken0_Fhl),
     .btb_taken1_Fhl         (btb_taken1_Fhl),
     .btb_match_br_Dhl       (btb_match_br_Dhl),
@@ -371,6 +381,11 @@ module riscv_Core
     .branch_cond_ltu_X0hl	   (branch_cond_ltu_X0hl),
     .branch_cond_ge_X0hl	   (branch_cond_ge_X0hl),
     .branch_cond_geu_X0hl	   (branch_cond_geu_X0hl),
+    .lateA0_X0hl            (lateA0_X0hl),
+    .lateA1_X0hl            (lateA1_X0hl),
+    .lateWd_X0hl            (lateWd_X0hl),
+    .lateB0_X0hl            (lateB0_X0hl),
+    .lateB1_X0hl            (lateB1_X0hl),
     .btb_taken0_Fhl          (btb_taken0_Fhl),
     .btb_taken1_Fhl          (btb_taken1_Fhl),
     .btb_match_br_Dhl        (btb_match_br_Dhl),

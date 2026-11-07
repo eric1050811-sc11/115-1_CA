@@ -252,3 +252,54 @@ D-empty cycles fall by 80% in vvadd and 86% in masked-filter compared with Part 
 
 Level 1 is met on all four benchmarks and Level 2 on three. cmplx-mult is still 87 cycles over: its remaining cycles are not branch-related (only 192 D-empty and 119 branch-hold cycles are left), but single issue, mostly a second turn for inst1 (33%), pairs that both need FUA (23%) and inst1 waiting on mul/div results (17%).
 
+### Late bypass of multiply results
+
+To pick the next optimization for cmplx-mult, I counted which producer blocks an instruction in its 603 "second turn, inst1 hazard" cycles: in 200 of them it is a `mul` in X2, and in 175 a `mul` in X1. The `mul` result only appears in X3, and an instruction needs its operands in decode, so a consumer of a `mul` waits until the `mul` reaches X3. But a consumer that issues while the `mul` is in X2 enters X0 exactly when the `mul` is in X3 (X2 and X3 never stall), so it could take the value there, one cycle earlier.
+
+The late bypass changes neither functional unit nor the pipeline depth, and adds no ALU; it only extends the bypass network:
+
+- Scoreboard: a `mul` in X2 is no longer a hazard. It reports a "late" bit for that source instead, so the consumer can issue. Consumers that use their operands already in decode keep the stall: `mul`/`div` (the multiplier takes its operands in decode) and `jalr` (its target is computed in decode).
+- Control: the late bits are steered to the pipelines like the bypass selects, and only kept where the operand really comes from a register: FUA operand 0 and 1, FUA store data (rs2 of a store), FUB operand 0 and 1. The five flags travel into X0 with the instruction.
+- Datapath: in X0, a flagged operand is taken from the `mul` result in X3 (`executeA_mux_out_X3hl`) instead of the value captured in decode. This covers the ALU inputs, the branch condition logic and the store data.
+- Stalls: if X0 stalls, the `mul` would move past X3 and the value would be lost. So in the stalled cycle the datapath writes the forwarded value into the X0 operand register, and control clears the flag at the same edge.
+
+The design passes all assembly tests and ubmarks under normal and randomized-delay simulation (43/43 and 4/4 each); the randomized-delay runs exercise the stall case.
+
+| ubmark        | Fetch prediction | + Late bypass | Change |
+| :------------ | ---------------: | ------------: | -----: |
+| vvadd         | 1073             | 1073          | 0      |
+| bin-search    | 1254             | 1254          | 0      |
+| cmplx-mult    | 3587             | **3387**      | −200 (−5.6%) |
+| masked-filter | 6199             | **6034**      | −165 (−2.7%) |
+
+The saving in cmplx-mult equals the 200 cycles measured with the `mul` in X2: its second-turn hazard cycles drop from 603 to 403. vvadd and bin-search have no multiplies. In masked-filter, the second-turn and inst0 hazard cycles drop by 57 and 108.
+
+Profile of the final design:
+
+| Category                  | vvadd     | bin-search | cmplx-mult | masked-filter |
+| :------------------------ | --------: | --------: | ---------: | ---------: |
+| D empty                   |  86 ( 8%) | 175 (14%) |  192 ( 6%) |  423 ( 7%) |
+| Mem stall                 |   0 ( 0%) |   0 ( 0%) |    0 ( 0%) |    0 ( 0%) |
+| Second turn, inst1 issues | 321 (30%) | 366 (29%) | 1194 (35%) | 1153 (19%) |
+| inst0 hazard              |  85 ( 8%) |  58 ( 5%) |  113 ( 3%) |  512 ( 8%) |
+| inst1 hazard              |   0 ( 0%) |   6 ( 0%) |    0 ( 0%) |   28 ( 0%) |
+| Jump                      |   3 ( 0%) |   4 ( 0%) |    4 ( 0%) |    3 ( 0%) |
+| Branch hold               |  90 ( 8%) | 191 (15%) |  119 ( 4%) |  752 (12%) |
+| Both non-ALU              | 284 (26%) |  45 ( 4%) |  829 (24%) |  745 (12%) |
+| RAW                       |  31 ( 3%) | 239 (19%) |  258 ( 8%) |  320 ( 5%) |
+| WAW                       |   2 ( 0%) |   2 ( 0%) |    2 ( 0%) |    2 ( 0%) |
+| Second turn, inst1 hazard |   3 ( 0%) |  30 ( 2%) |  403 (12%) |  114 ( 2%) |
+| Dual issue                | 168 (16%) | 138 (11%) |  273 ( 8%) | 1982 (33%) |
+| Total (= `num_cycles`)    | **1073**  |  **1254** |  **3387**  |  **6034**  |
+
+### Evaluation
+
+| ubmark        | Part 1 | Part 2 (final) | Change vs Part 1 | Speedup | Level 1 limit | Level 2 limit |
+| :------------ | -----: | -------------: | ---------------: | ------: | ------------: | ------------: |
+| vvadd         | 1424   | 1073           | −24.6%           | 1.33×   | 1400          | 1200          |
+| bin-search    | 1578   | 1254           | −20.5%           | 1.26×   | 1500          | 1300          |
+| cmplx-mult    | 3826   | 3387           | −11.5%           | 1.13×   | 4000          | 3500          |
+| masked-filter | 8809   | 6034           | −31.5%           | 1.46×   | 8500          | 7500          |
+
+The final design passes all assembly tests and ubmarks under normal and randomized-delay simulation, and meets the Level 1 and Level 2 cycle requirements on all four benchmarks. Contributions, measured step by step: fetch prediction with the BTB brings the largest gain on the branch-heavy benchmarks (vvadd, bin-search, masked-filter), and the late bypass closes the last gap on cmplx-mult.
+

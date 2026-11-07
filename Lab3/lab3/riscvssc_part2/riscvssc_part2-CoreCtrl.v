@@ -86,6 +86,11 @@ module riscv_CoreCtrl
   input             branch_cond_ltu_X0hl,
   input             branch_cond_ge_X0hl,
   input             branch_cond_geu_X0hl,
+  output reg        lateA0_X0hl,      // FUA operand 0 in X0: use the mul result in X3
+  output reg        lateA1_X0hl,      // FUA operand 1
+  output reg        lateWd_X0hl,      // FUA store data
+  output reg        lateB0_X0hl,      // FUB operand 0
+  output reg        lateB1_X0hl,      // FUB operand 1
   input             btb_taken0_Fhl,   // BTB: slot 0 of the pair in F predicted taken
   input             btb_taken1_Fhl,   // BTB: slot 1 of the pair in F predicted taken
   input             btb_match_br_Dhl, // BTB target used == branch_targ_Dhl
@@ -989,6 +994,8 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
     end
   end
 
+  `endif
+
   always @(*) begin
     // FUA
     instA_Dhl            = 0;
@@ -1211,6 +1218,43 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
   // Scoreboard
   //----------------------------------------------------------------------
 
+  // Late bypass of a mul result (see the scoreboard). An instruction that
+  // uses its operands already in D cannot take a value late: mul/div send
+  // their operands to the multiplier from D, and jalr computes its target
+  // in D. For those the scoreboard keeps the stall.
+  wire nolate_0_Dhl = is_muldiv_0_Dhl || ( cs0[`RISCV_INST_MSG_J_EN] && ( pc_mux_sel_0_Dhl == pm_r ) );
+  wire nolate_1_Dhl = is_muldiv_1_Dhl || ( cs1[`RISCV_INST_MSG_J_EN] && ( pc_mux_sel_1_Dhl == pm_r ) );
+  wire src00_late_Dhl, src01_late_Dhl, src10_late_Dhl, src11_late_Dhl;
+
+  // Per pipeline, only where the operand really comes from a register
+  wire lA0_Dhl = steering_mux_sel_Dhl ? src10_late_Dhl : src00_late_Dhl;  // rs1 of the inst in FUA
+  wire lA1_Dhl = steering_mux_sel_Dhl ? src11_late_Dhl : src01_late_Dhl;  // rs2 of the inst in FUA
+  wire lB0_Dhl = steering_mux_sel_Dhl ? src00_late_Dhl : src10_late_Dhl;
+  wire lB1_Dhl = steering_mux_sel_Dhl ? src01_late_Dhl : src11_late_Dhl;
+  wire lateA0_Dhl = lA0_Dhl && ( opA0_mux_sel_Dhl == am_rdat );
+  wire lateA1_Dhl = lA1_Dhl && ( opA1_mux_sel_Dhl == bm_rdat );
+  wire lateWd_Dhl = lA1_Dhl && dmemreq_msg_rw_Dhl;                       // store data is rs2
+  wire lateB0_Dhl = lB0_Dhl && ( opB0_mux_sel_Dhl == am_rdat );
+  wire lateB1_Dhl = lB1_Dhl && ( opB1_mux_sel_Dhl == bm_rdat );
+
+  // The flags go into X0 with the instruction. If X0 stalls, the datapath
+  // writes the forwarded value into the X0 operand register in that cycle
+  // (the mul is still in X3), so the flag is cleared and the value kept.
+  always @( posedge clk ) begin
+    if ( reset ) begin
+      lateA0_X0hl <= 1'b0; lateA1_X0hl <= 1'b0; lateWd_X0hl <= 1'b0;
+      lateB0_X0hl <= 1'b0; lateB1_X0hl <= 1'b0;
+    end
+    else if ( !stall_X0hl ) begin
+      lateA0_X0hl <= lateA0_Dhl; lateA1_X0hl <= lateA1_Dhl; lateWd_X0hl <= lateWd_Dhl;
+      lateB0_X0hl <= lateB0_Dhl; lateB1_X0hl <= lateB1_Dhl;
+    end
+    else begin
+      lateA0_X0hl <= 1'b0; lateA1_X0hl <= 1'b0; lateWd_X0hl <= 1'b0;
+      lateB0_X0hl <= 1'b0; lateB1_X0hl <= 1'b0;
+    end
+  end
+
   riscv_CoreScoreboard scoreboard
   (
     .clk               (clk),
@@ -1229,6 +1273,13 @@ Second turn (inst0_issued_Dhl = 1), so sel is always 1
 
     .stall_0_hazard    (stall_0_hazard_Dhl),
     .stall_1_hazard    (stall_1_hazard_Dhl),
+
+    .nolate_0          (nolate_0_Dhl),
+    .nolate_1          (nolate_1_Dhl),
+    .src00_late        (src00_late_Dhl),
+    .src01_late        (src01_late_Dhl),
+    .src10_late        (src10_late_Dhl),
+    .src11_late        (src11_late_Dhl),
 
     .src00_byp_mux_sel (src00_byp_mux_sel),
     .src01_byp_mux_sel (src01_byp_mux_sel),
