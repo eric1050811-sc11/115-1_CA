@@ -482,8 +482,21 @@ module riscv_CacheAltCtrl (
 
 // val/rdy enable
 assign memreq_en = memreq_val && memreq_rdy;
+assign miss      = ( !valid0_bit | !tag0_match ) && ( !valid1_bit | !tag1_match ); // both way miss
+assign tag_wen   = ( curr_state == READ_CACHE && !miss ) || ( curr_state == UPDATE_CACHE );
+assign data_wen  = ( curr_state == UPDATE_CACHE );
+assign write_data_mux_sel = miss; // tag RAM is not written until the end of UPDATE_CACHE, so miss still holds here
 
-// TODO
+assign refill_cnt_en  = ( curr_state == READ_MEM_RESP && cacheresp_val ); // a refill beat arrived
+assign refill_cnt_clr = ( reset || next_state == UPDATE_CACHE ); // also clear on reset
+
+assign wb_cnt_en = ( curr_state == WB_MEM_RESP && cacheresp_val );
+assign wb_cnt_clr = ( reset || next_state == READ_MEM_REQ );
+
+assign hit_way_mux_sel = (valid1_bit && tag1_match);
+
+wire [1:0] valid = {valid1_bit, valid0_bit};
+wire [1:0] dirty = {dirty1_bit, dirty0_bit};
 
 //------------------------------------------------------------------------
 // FSM
@@ -515,9 +528,35 @@ always@ (*) begin
         IDLE: begin
             next_state = ( memreq_val ) ? READ_CACHE : IDLE;
         end
-
-    // TODO
-
+        READ_CACHE: begin
+            next_state = ( miss ) ? ( valid[victim_way] && dirty[victim_way] ) ? WB_MEM_REQ : READ_MEM_REQ // miss, store if dirty, get data from memory
+                       : ( type == 1'b1 ) ? UPDATE_CACHE // hit & write
+                       : ( !memreq_rdy )  ? READ_CACHE   // hit & read, response blocked
+                       : ( memreq_val )   ? READ_CACHE   // hit & read, another request in
+                       :                    IDLE;        // response delivered, no new request
+        end
+        UPDATE_CACHE: begin
+            next_state = DONE;
+        end
+        READ_MEM_REQ: begin
+            next_state = ( cachereq_rdy ) ? READ_MEM_RESP : READ_MEM_REQ;
+        end
+        READ_MEM_RESP: begin
+            next_state = ( !cacheresp_val )         ? READ_MEM_RESP // waiting for memory
+                       : ( refill_counter == 4'd3 ) ? UPDATE_CACHE  // finish refill
+                       :                              READ_MEM_REQ; // next beat
+        end
+        DONE: begin
+            next_state = ( memresp_rdy ) ? IDLE : DONE;
+        end
+        WB_MEM_REQ: begin
+            next_state = (cachereq_rdy) ? WB_MEM_RESP : WB_MEM_REQ;
+        end
+        WB_MEM_RESP: begin
+            next_state = ( !cacheresp_val )     ? WB_MEM_RESP
+                       : ( wb_counter == 4'd3 ) ? READ_MEM_REQ
+                       :                          WB_MEM_REQ;
+        end
     endcase
 end
 
@@ -541,9 +580,48 @@ always@ (*) begin
             cachereq_val_reg  = 1'b0;
             cacheresp_rdy_reg = 1'b0;
         end
-
-    // TODO
-
+        READ_CACHE: begin
+            memreq_rdy_reg    = (miss) ? 1'b0 : (memresp_rdy & !type) ? 1'b1 : 1'b0;
+            memresp_val_reg   = (miss | type) ? 1'b0 : 1'b1;
+            cachereq_val_reg  = 1'b0;
+            cacheresp_rdy_reg = 1'b0;
+        end
+        UPDATE_CACHE: begin
+            memreq_rdy_reg    = 1'b0;
+            memresp_val_reg   = 1'b0;
+            cachereq_val_reg  = 1'b0;
+            cacheresp_rdy_reg = 1'b0;
+        end
+        READ_MEM_REQ: begin
+            memreq_rdy_reg    = 1'b0;
+            memresp_val_reg   = 1'b0;
+            cachereq_val_reg  = 1'b1; // send request to memory
+            cacheresp_rdy_reg = 1'b0;
+        end
+        READ_MEM_RESP: begin
+            memreq_rdy_reg    = 1'b0;
+            memresp_val_reg   = 1'b0;
+            cachereq_val_reg  = 1'b0;
+            cacheresp_rdy_reg = 1'b1; // ready to receive response from memory
+        end
+        DONE: begin
+            memreq_rdy_reg    = 1'b0;
+            memresp_val_reg   = 1'b1; // response to CPU valid
+            cachereq_val_reg  = 1'b0;
+            cacheresp_rdy_reg = 1'b0;
+        end
+        WB_MEM_REQ: begin
+            memreq_rdy_reg    = 1'b0;
+            memresp_val_reg   = 1'b0;
+            cachereq_val_reg  = 1'b1;
+            cacheresp_rdy_reg = 1'b0;
+        end
+        WB_MEM_RESP: begin
+            memreq_rdy_reg    = 1'b0;
+            memresp_val_reg   = 1'b0;
+            cachereq_val_reg  = 1'b0;
+            cacheresp_rdy_reg = 1'b1;
+        end
     endcase
 end
 
