@@ -15,3 +15,7 @@ Lab3/lab3/build/*-sim
 Lab3/lab3/build/*.out
 Lab3/lab3/tests/build
 Lab3/lab3/ubmark/build
+
+Lab4/lab4/build/*-sim
+Lab4/lab4/build/*.out
+Lab4/lab4/tests/build
