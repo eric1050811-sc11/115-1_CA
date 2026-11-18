@@ -174,41 +174,42 @@ module riscv_CacheAltDpath (
 //------------------------------------------------------------------------
 
 // message
-wire        memreq_type = // TODO
-wire [31:0] memreq_addr = // TODO
-wire [1:0]  memreq_len  = // TODO
-wire [31:0] memreq_data = // TODO
+wire        memreq_type = memreq_msg[66];
+wire [31:0] memreq_addr = memreq_msg[65:34];
+wire [1:0]  memreq_len  = memreq_msg[33:32];
+wire [31:0] memreq_data = memreq_msg[31: 0];
 
 wire [127:0] cacheresp_data = cacheresp_msg[127:0];
 
 // address
-wire [`OFF_BITS-1:0] offset = // TODO
-wire [`IDX_BITS-1:0] index  = // TODO
-wire [`TAG_BITS-1:0] tag    = // TODO
+wire [`OFF_BITS-1:0] offset = memreq_addr_reg[ 5: 0];
+wire [`IDX_BITS-1:0] index  = memreq_addr_reg[10: 6];
+wire [`TAG_BITS-1:0] tag    = memreq_addr_reg[31:11];
 
 // extract tag and status bits
-wire [22:0] read_tagS0 = // TODO
-wire [22:0] read_tagS1 = // TODO
+wire [22:0] read_tagS0 = read_tagS[22: 0];
+wire [22:0] read_tagS1 = read_tagS[45:23];
 
-// read way0
-wire [`TAG_BITS-1:0] read_tag0  = // TODO
-assign               valid0_bit = // TODO
-assign               dirty0_bit = // TODO
+// read way0 {valid, dirty, tag}
+wire [`TAG_BITS-1:0] read_tag0  = read_tagS0[`TAG_BITS-1:0];
+assign               dirty0_bit = read_tagS0[`TAG_BITS];
+assign               valid0_bit = read_tagS0[`TAG_BITS+1];
 
-// read way1
-wire [`TAG_BITS-1:0] read_tag1  = // TODO
-assign               valid1_bit = // TODO
-assign               dirty1_bit = // TODO
+// read way1 {valid, dirty, tag}
+wire [`TAG_BITS-1:0] read_tag1  = read_tagS1[`TAG_BITS-1:0];
+assign               dirty1_bit = read_tagS1[`TAG_BITS];
+assign               valid1_bit = read_tagS1[`TAG_BITS+1];
 
-assign victim_way = // TODO
+// use left most bit to indicate LRU way
+assign victim_way = read_tagS[46];
 
 // 2-way data
 wire [`BLK_SIZE-1:0] read_data0 = read_data[511:0];
 wire [`BLK_SIZE-1:0] read_data1 = read_data[1023:512];
 
 // compare tag
-assign tag0_match    = ( tag == /* TODO */ );
-assign tag1_match    = ( tag == /* TODO */ );
+assign tag0_match    = ( tag == read_tag0 );
+assign tag1_match    = ( tag == read_tag1 );
 
 // select victim block in main cache (data/tag)
 wire [`BLK_SIZE-1:0] read_data_vc  = ( victim_way ) ? read_data1 : read_data0;
@@ -228,10 +229,10 @@ wire [`BLK_SIZE-1:0] hit_block_data = ( hit_way_mux_sel ) ? read_data1 : read_da
 reg [31:0] read_data_hit;
 always@ (*) begin
     case ( memreq_len_reg )
-        2'b01: read_data_hit = // TODO
-        2'b10: read_data_hit = // TODO
-        2'b11: read_data_hit = // TODO
-        2'b00: read_data_hit = // TODO
+        2'b01: read_data_hit = hit_block_data[offset*8 +: 8];
+        2'b10: read_data_hit = hit_block_data[offset*8 +: 16];
+        2'b11: read_data_hit = hit_block_data[offset*8 +: 24];
+        2'b00: read_data_hit = hit_block_data[offset*8 +: 32];
     endcase
 end
 
@@ -240,10 +241,10 @@ wire [`BLK_SIZE-1:0] read_data_mux_out = ( victim_way_reg ) ? read_data1 : read_
 reg  [31:0]          read_data_miss;
 always@ (*) begin
     case ( memreq_len_reg )
-        2'b01: read_data_miss = // TODO
-        2'b10: read_data_miss = // TODO
-        2'b11: read_data_miss = // TODO
-        2'b00: read_data_miss = // TODO
+        2'b01: read_data_miss = read_data_mux_out[offset*8 +: 8];
+        2'b10: read_data_miss = read_data_mux_out[offset*8 +: 16];
+        2'b11: read_data_miss = read_data_mux_out[offset*8 +: 24];
+        2'b00: read_data_miss = read_data_mux_out[offset*8 +: 32];
     endcase
 end
 
@@ -252,10 +253,10 @@ reg [`BLK_SIZE-1:0] write_data_hit;
 always@ (*) begin
     write_data_hit = hit_block_data;
     case ( memreq_len_reg )
-        2'b01: /* TODO */ = memreq_data_reg[7:0];
-        2'b10: /* TODO */ = memreq_data_reg[15:0];
-        2'b11: /* TODO */ = memreq_data_reg[23:0];
-        2'b00: /* TODO */ = memreq_data_reg[31:0];
+        2'b01: write_data_hit[offset*8 +: 8] = memreq_data_reg[7:0];
+        2'b10: write_data_hit[offset*8 +: 16] = memreq_data_reg[15:0];
+        2'b11: write_data_hit[offset*8 +: 24] = memreq_data_reg[23:0];
+        2'b00: write_data_hit[offset*8 +: 32] = memreq_data_reg[31:0];
     endcase
 end
 wire [`D_SET_SIZE-1:0] write_data_hit_o = ( hit_way_mux_sel )
@@ -267,27 +268,31 @@ always@ (*) begin
     write_data_miss = refill_data;
     if ( memreq_type_reg == `WRITE ) begin
         case ( memreq_len_reg )
-            2'b01: /* TODO */ = memreq_data_reg[7:0];
-            2'b10: /* TODO */ = memreq_data_reg[15:0];
-            2'b11: /* TODO */ = memreq_data_reg[23:0];
-            2'b00: /* TODO */ = memreq_data_reg[31:0];
+            2'b01: write_data_miss[offset*8 +: 8] = memreq_data_reg[7:0];
+            2'b10: write_data_miss[offset*8 +: 16] = memreq_data_reg[15:0];
+            2'b11: write_data_miss[offset*8 +: 24] = memreq_data_reg[23:0];
+            2'b00: write_data_miss[offset*8 +: 32] = memreq_data_reg[31:0];
         endcase
     end
 end
-wire [`D_SET_SIZE-1:0] write_data_miss_o = // TODO
+wire [`D_SET_SIZE-1:0] write_data_miss_o = ( victim_way_reg )
+                                         ? {write_data_miss, read_data0} : {read_data1, write_data_miss};
 
 // select write data: hit or miss
 wire [`D_SET_SIZE-1:0] write_data_mux_out = ( write_data_mux_sel ) ? write_data_miss_o : write_data_hit_o;
 
-// set write tagS
-wire [46:0] write_tagS = // TODO
+wire [22:0] new_tag_entry = {1'b1, type, tag};
+wire [46:0] write_tagS = (tag0_match && valid0_bit) ? {1'b1, valid1_bit, dirty1_bit, read_tag1, valid0_bit, {type | dirty0_bit}, read_tag0}
+                       : (tag1_match && valid1_bit) ? {1'b0, valid1_bit, {type | dirty1_bit}, read_tag1, valid0_bit, dirty0_bit, read_tag0}
+                       : (victim_way_reg)           ? {1'b0, new_tag_entry, valid0_bit, dirty0_bit, read_tag0}  // way 1 being replaced
+                                                    : {1'b1, valid1_bit, dirty1_bit, read_tag1, new_tag_entry}; // way 0 being replaced
 
 // refill address (advance by `MEM_BEAT_BYTES for each beat)
-wire [31:0] refill_addr = // TODO
+wire [31:0] refill_addr = {memreq_addr_reg[31:6], 6'd0} + refill_counter * `MEM_BEAT_BYTES;
 
-// write back address and data
-wire [31:0] wb_addr  = // TODO
-wire [127:0] wb_data = // TODO
+// write back address and data, to memory
+wire [ 31:0] wb_addr = {read_tagS_vc_reg[20:0], index, 6'd0} + wb_counter * `MEM_BEAT_BYTES;
+wire [127:0] wb_data = read_data_vc_reg[wb_counter*`MEM_BEAT_BITS +: 128];
 
 //------------------------------------------------------------------------
 // Sequential logic
@@ -316,11 +321,11 @@ reg [22:0]          read_tagS_vc_reg;
 reg [22:0]          read_tagS_surv_reg;
 always@ ( posedge clk ) begin
     if ( miss ) begin
-        read_data_vc_reg   <= // TODO
-        read_data_surv_reg <= // TODO
-        victim_way_reg     <= // TODO
-        read_tagS_vc_reg   <= // TODO
-        read_tagS_surv_reg <= // TODO
+        read_data_vc_reg   <= read_data_vc;
+        read_data_surv_reg <= read_data_surv;
+        victim_way_reg     <= victim_way;
+        read_tagS_vc_reg   <= read_tagS_vc;
+        read_tagS_surv_reg <= read_tagS_surv;
     end
 end
 
@@ -341,7 +346,7 @@ always@ ( posedge clk ) begin
         refill_data <= 512'b0;
     end
     else if ( refill_cnt_en ) begin
-        // TODO
+        refill_data <= {cacheresp_data, (refill_data[511:128])};
     end
 end
 
@@ -365,6 +370,8 @@ localparam UPDATE_CACHE   = 3'b010;
 localparam READ_MEM_REQ   = 3'b011;
 localparam READ_MEM_RESP  = 3'b100;
 localparam DONE           = 3'b101;
+localparam WB_MEM_REQ     = 3'b110;
+localparam WB_MEM_RESP    = 3'b111;
 
 reg [34:0] memresp_msg_reg;
 reg [164:0] cachereq_msg_reg;
@@ -372,16 +379,18 @@ reg [164:0] cachereq_msg_reg;
 always@ (*) begin
 
     memresp_msg_reg   = 35'b0;
-    cachereq_msg_reg  = 165'b0;
+    cachereq_msg_reg  = {1'b0, refill_addr, 4'd0, 128'd0};
 
     case ( state )
-        IDLE: begin
-            memresp_msg_reg   = 35'b0;
-            cachereq_msg_reg  = 165'b0;
+        READ_CACHE: begin
+            memresp_msg_reg   = {memreq_type_reg, memreq_len_reg, read_data_hit};
         end
-
-    // TODO
-
+        DONE: begin
+            memresp_msg_reg   = {memreq_type_reg, memreq_len_reg, read_data_hit};
+        end
+        WB_MEM_REQ: begin
+            cachereq_msg_reg = {1'b1, wb_addr, 4'd0, wb_data};
+        end
     endcase
 end
 
@@ -390,6 +399,8 @@ assign cachereq_msg  = cachereq_msg_reg;
 
 //------------------------------------------------------------------------
 // D-cache RAM module
+// 4KiB, 2-way set associative, write-allocate with 64B blocks
+// 32 entries, 2^5, [4:0]
 //------------------------------------------------------------------------
 
 wire [46:0]            read_tagS;
@@ -397,33 +408,33 @@ wire [`D_SET_SIZE-1:0] read_data;
 
 // 2-way assocative
 vc_RAM_rst_1w1r_pf #(
-    .DATA_SZ     (),
-    .ENTRIES     (),
-    .ADDR_SZ     (),
-    .RESET_VALUE ()
+    .DATA_SZ     (1024), // 2 way, 64B, total of 1024b
+    .ENTRIES     (32),
+    .ADDR_SZ     (5),
+    .RESET_VALUE (0)
 ) _data (
-    .clk         (),
-    .reset_p     (),
-    .raddr       (),
-    .rdata       (),
-    .wen_p       (),
-    .waddr_p     (),
-    .wdata_p     ()
+    .clk         (clk),
+    .reset_p     (reset),
+    .raddr       (index),
+    .rdata       (read_data),
+    .wen_p       (data_wen),
+    .waddr_p     (index),
+    .wdata_p     (write_data_mux_out)
 );
 
 vc_RAM_rst_1w1r_pf #(
-    .DATA_SZ     (),
-    .ENTRIES     (),
-    .ADDR_SZ     (),
-    .RESET_VALUE ()
+    .DATA_SZ     (47),
+    .ENTRIES     (32),
+    .ADDR_SZ     (5),
+    .RESET_VALUE (0)
 ) _tag (
-    .clk         (),
-    .reset_p     (),
-    .raddr       (),
-    .rdata       (),
-    .wen_p       (),
-    .waddr_p     (),
-    .wdata_p     ()
+    .clk         (clk),
+    .reset_p     (reset),
+    .raddr       (index),
+    .rdata       (read_tagS),
+    .wen_p       (tag_wen),
+    .waddr_p     (index),
+    .wdata_p     (write_tagS)
 );
 
 
@@ -484,6 +495,8 @@ localparam UPDATE_CACHE   = 3'b010;
 localparam READ_MEM_REQ   = 3'b011;
 localparam READ_MEM_RESP  = 3'b100;
 localparam DONE           = 3'b101;
+localparam WB_MEM_REQ     = 3'b110;
+localparam WB_MEM_RESP    = 3'b111;
 
 reg [2:0] curr_state, next_state;
 
